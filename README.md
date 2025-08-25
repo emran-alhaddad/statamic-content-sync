@@ -17,17 +17,14 @@ npm i && npm run build
 php artisan statamic:stache:refresh && php artisan cache:clear
 Open Utilities → Content Sync in the CP.
 
-.env (optional)
-ini
-Copy
-Edit
+## .env (optional)
+
 CONTENT_SYNC_DISK=local
 CONTENT_SYNC_FOLDER=sync
 CONTENT_SYNC_CHUNK=500
-CLI (optional)
-bash
-Copy
-Edit
+
+## CLI (optional)
+
 php artisan content-sync:export --type=collections --handles=pages,news --sites=english
 php artisan content-sync:import storage/app/sync/collections-export-20250101-120000.json --apply
 License

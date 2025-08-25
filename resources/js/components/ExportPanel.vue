@@ -2,7 +2,6 @@
     <div class="card p-4 space-y-4">
         <TypePicker v-model="type" />
         <MultiSelect v-if="type" :type="type" v-model="handles" />
-
         <div class="flex gap-3 items-end">
             <div class="w-1/3">
                 <label class="font-medium">Sites (optional, comma separated)</label>
@@ -17,44 +16,50 @@
                 <input v-model="out" class="input" placeholder="my-export.json" />
             </div>
         </div>
-
         <div>
             <button class="btn btn-primary" @click="runExport" :disabled="busy">{{ busy ? 'Exporting…' : 'Export'
-            }}</button>
+                }}</button>
         </div>
-
         <div v-if="result" class="mt-4 text-sm">
             <p>Exported <b>{{ result.count }}</b> items → <code>{{ result.path }}</code></p>
         </div>
     </div>
 </template>
-<script setup>
-import { ref } from 'vue';
+
+<script>
 import TypePicker from './TypePicker.vue';
 import MultiSelect from './MultiSelect.vue';
 import { exportPayload } from '../api';
 
-const type = ref('collections');
-const handles = ref([]);
-const sitesRaw = ref('');
-const since = ref('');
-const out = ref('export.json');
-const busy = ref(false);
-const result = ref(null);
-
-async function runExport() {
-    busy.value = true;
-    try {
-        const payload = {
-            type: type.value,
-            handles: handles.value,
-            sites: sitesRaw.value ? sitesRaw.value.split(',').map(s => s.trim()).filter(Boolean) : [],
-            since: since.value || null,
-            out: out.value,
+export default {
+    components: { TypePicker, MultiSelect },
+    data() {
+        return {
+            type: 'collections',
+            handles: [],
+            sitesRaw: '',
+            since: '',
+            out: 'export.json',
+            busy: false,
+            result: null
         };
-        result.value = await exportPayload(payload);
-    } finally {
-        busy.value = false;
+    },
+    methods: {
+        async runExport() {
+            this.busy = true;
+            try {
+                const payload = {
+                    type: this.type,
+                    handles: this.handles,
+                    sites: this.sitesRaw ? this.sitesRaw.split(',').map(s => s.trim()).filter(Boolean) : [],
+                    since: this.since || null,
+                    out: this.out
+                };
+                this.result = await exportPayload(payload);
+            } finally {
+                this.busy = false;
+            }
+        }
     }
-}
+};
 </script>

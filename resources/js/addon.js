@@ -1,4 +1,3 @@
-import { createApp } from 'vue';
 import Utility from './components/Utility.vue';
 
 Statamic.booting(() => {

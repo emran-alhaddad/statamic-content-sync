@@ -28,36 +28,65 @@
         </div>
     </div>
 </template>
-<script setup>
-import { ref } from 'vue';
+
+<script>
 import { previewImport, commitImport } from '../api';
 import DiffViewer from './DiffViewer.vue';
 
-const file = ref(null);
-const busy = ref(false);
-const diffs = ref(null);
-const decisions = ref({});
-const committing = ref(false);
-
-function onFile(e) { file.value = e.target.files[0]; diffs.value = null; decisions.value = {}; }
-function badge(status) { return status === 'create' ? 'bg-green-100 text-green-800' : status === 'update' ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-800'; }
-
-async function preview() {
-    if (!file.value) return;
-    busy.value = true;
-    try {
-        const res = await previewImport(file.value);
-        diffs.value = res;
-        decisions.value = Object.fromEntries(res.diffs.map(d => [d.key, 'incoming']));
-    } finally { busy.value = false; }
-}
-
-async function commit() {
-    committing.value = true;
-    try {
-        const payload = { type: diffs.value.type, decisions: diffs.value.diffs.map(d => ({ key: d.key, action: decisions.value[d.key], incoming: d.incoming })) };
-        const res = await commitImport(payload);
-        Statamic.$toast.success(`Updated ${res.results.updated}, Created ${res.results.created}, Skipped ${res.results.skipped}`);
-    } finally { committing.value = false; }
-}
+export default {
+    components: { DiffViewer },
+    data() {
+        return {
+            file: null,
+            busy: false,
+            diffs: null,
+            decisions: {},
+            committing: false
+        };
+    },
+    methods: {
+        onFile(e) {
+            this.file = e.target.files[0];
+            this.diffs = null;
+            this.decisions = {};
+        },
+        badge(status) {
+            return status === 'create'
+                ? 'bg-green-100 text-green-800'
+                : status === 'update'
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-gray-100 text-gray-800';
+        },
+        async preview() {
+            if (!this.file) return;
+            this.busy = true;
+            try {
+                const res = await previewImport(this.file);
+                this.diffs = res;
+                this.decisions = Object.fromEntries(res.diffs.map(d => [d.key, 'incoming']));
+            } finally {
+                this.busy = false;
+            }
+        },
+        async commit() {
+            this.committing = true;
+            try {
+                const payload = {
+                    type: this.diffs.type,
+                    decisions: this.diffs.diffs.map(d => ({
+                        key: d.key,
+                        action: this.decisions[d.key],
+                        incoming: d.incoming
+                    }))
+                };
+                const res = await commitImport(payload);
+                Statamic.$toast.success(
+                    `Updated ${res.results.updated}, Created ${res.results.created}, Skipped ${res.results.skipped}`
+                );
+            } finally {
+                this.committing = false;
+            }
+        }
+    }
+};
 </script>

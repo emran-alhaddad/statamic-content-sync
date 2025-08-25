@@ -10,10 +10,26 @@
         </div>
     </div>
 </template>
-<script setup>
-import { computed } from 'vue';
-const props = defineProps({ diff: { type: Object, required: true } });
-const current = computed(() => Object.fromEntries(Object.entries(props.diff).map(([k, v]) => [k, v.current])));
-const incoming = computed(() => Object.fromEntries(Object.entries(props.diff).map(([k, v]) => [k, v.incoming])));
-function pretty(obj) { return JSON.stringify(obj, null, 2); }
+
+<script>
+export default {
+    props: { diff: { type: Object, required: true } },
+    computed: {
+        current() {
+            const obj = {};
+            Object.entries(this.diff).forEach(([k, v]) => (obj[k] = v.current));
+            return obj;
+        },
+        incoming() {
+            const obj = {};
+            Object.entries(this.diff).forEach(([k, v]) => (obj[k] = v.incoming));
+            return obj;
+        }
+    },
+    methods: {
+        pretty(obj) {
+            return JSON.stringify(obj, null, 2);
+        }
+    }
+};
 </script>

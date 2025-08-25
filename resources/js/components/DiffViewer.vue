@@ -1,12 +1,12 @@
 <template>
-    <div class="mt-3 text-xs grid grid-cols-1 md:grid-cols-2 gap-3">
+    <div class="mt-4 grid gap-3" style="grid-template-columns: 1fr 1fr;">
         <div>
-            <div class="font-semibold mb-1">Current</div>
-            <pre class="bg-gray-50 p-2 rounded overflow-auto">{{ pretty(current) }}</pre>
+            <div class="font-semibold mb-1 text-slate-800">Current</div>
+            <pre class="cs-pre">{{ pretty(current) }}</pre>
         </div>
         <div>
-            <div class="font-semibold mb-1">Incoming</div>
-            <pre class="bg-gray-50 p-2 rounded overflow-auto">{{ pretty(incoming) }}</pre>
+            <div class="font-semibold mb-1 text-slate-800">Incoming</div>
+            <pre class="cs-pre">{{ pretty(incoming) }}</pre>
         </div>
     </div>
 </template>
@@ -15,21 +15,9 @@
 export default {
     props: { diff: { type: Object, required: true } },
     computed: {
-        current() {
-            const obj = {};
-            Object.entries(this.diff).forEach(([k, v]) => (obj[k] = v.current));
-            return obj;
-        },
-        incoming() {
-            const obj = {};
-            Object.entries(this.diff).forEach(([k, v]) => (obj[k] = v.incoming));
-            return obj;
-        }
+        current() { const o = {}; Object.entries(this.diff).forEach(([k, v]) => o[k] = v.current); return o; },
+        incoming() { const o = {}; Object.entries(this.diff).forEach(([k, v]) => o[k] = v.incoming); return o; }
     },
-    methods: {
-        pretty(obj) {
-            return JSON.stringify(obj, null, 2);
-        }
-    }
+    methods: { pretty(obj) { return JSON.stringify(obj, null, 2); } }
 };
 </script>

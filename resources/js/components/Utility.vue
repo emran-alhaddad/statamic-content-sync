@@ -1,11 +1,13 @@
 <template>
     <div class="space-y-6">
-        <div class="card p-4">
-            <div class="flex gap-4">
-                <button class="btn" :class="{ 'btn-primary': tab === 'export' }" @click="tab = 'export'">Export</button>
-                <button class="btn" :class="{ 'btn-primary': tab === 'import' }" @click="tab = 'import'">Import</button>
+        <div class="cs-card p-4 flex items-center justify-between">
+            <div class="cs-title">Content Sync</div>
+            <div class="cs-tabbar">
+                <button class="cs-tab" :class="{ active: tab === 'export' }" @click="tab = 'export'">Export</button>
+                <button class="cs-tab" :class="{ active: tab === 'import' }" @click="tab = 'import'">Import</button>
             </div>
         </div>
+
         <ExportPanel v-if="tab === 'export'" />
         <ImportPanel v-else />
     </div>
@@ -17,8 +19,6 @@ import ImportPanel from './ImportPanel.vue';
 
 export default {
     components: { ExportPanel, ImportPanel },
-    data() {
-        return { tab: 'export' };
-    }
+    data() { return { tab: 'export' }; }
 };
 </script>

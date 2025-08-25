@@ -1,13 +1,16 @@
 <template>
     <div>
-        <label class="font-medium block mb-1">Select {{ label }}</label>
+        <label class="cs-label">Select {{ label }}</label>
         <div class="flex gap-2">
-            <select class="input w-full" multiple size="6" :value="value" @change="onChange">
-                <option v-for="opt in options" :key="opt" :value="opt">{{ opt }}</option>
-            </select>
-            <div class="w-40">
-                <button class="btn w-full mb-2" @click.prevent="selectAll">Select All</button>
-                <button class="btn w-full" @click.prevent="clearAll">Clear</button>
+            <div class="flex-1">
+                <input v-model="q" class="cs-input" placeholder="Search…" />
+                <select class="cs-select mt-2" multiple :size="8" :value="value" @change="onChange">
+                    <option v-for="opt in filtered" :key="opt" :value="opt">{{ opt }}</option>
+                </select>
+            </div>
+            <div class="w-36 space-y-2">
+                <button class="cs-btn ghost w-full" @click.prevent="selectAll">Select All</button>
+                <button class="cs-btn ghost w-full" @click.prevent="clearAll">Clear</button>
             </div>
         </div>
     </div>
@@ -17,46 +20,27 @@
 import { fetchOptions } from '../api';
 
 export default {
-    props: {
-        type: { type: String, required: true },
-        value: { type: Array, default: () => [] }
-    },
-    data() {
-        return { options: [] };
-    },
+    props: { type: { type: String, required: true }, value: { type: Array, default: () => [] } },
+    data() { return { options: [], q: '' }; },
     computed: {
         label() {
-            return (
-                {
-                    collections: 'Collections',
-                    taxonomies: 'Taxonomies',
-                    navigation: 'Navigation',
-                    globals: 'Globals',
-                    assets: 'Asset Containers'
-                }[this.type] || 'Items'
-            );
+            return ({ collections: 'Collections', taxonomies: 'Taxonomies', navigation: 'Navigation', globals: 'Globals', assets: 'Asset Containers' }[this.type]) || 'Items';
+        },
+        filtered() {
+            const s = this.q.toLowerCase();
+            return this.options.filter(o => o.toLowerCase().includes(s));
         }
     },
     watch: {
         type: {
             immediate: true,
-            async handler(t) {
-                this.options = await fetchOptions(t);
-                this.$emit('input', []); // reset selection on type change
-            }
+            async handler(t) { this.options = await fetchOptions(t); this.$emit('input', []); this.q = ''; }
         }
     },
     methods: {
-        onChange(e) {
-            const selected = Array.from(e.target.selectedOptions).map(o => o.value);
-            this.$emit('input', selected);
-        },
-        selectAll() {
-            this.$emit('input', [...this.options]);
-        },
-        clearAll() {
-            this.$emit('input', []);
-        }
+        onChange(e) { this.$emit('input', Array.from(e.target.selectedOptions).map(o => o.value)); },
+        selectAll() { this.$emit('input', [...this.filtered]); },
+        clearAll() { this.$emit('input', []); }
     }
 };
 </script>

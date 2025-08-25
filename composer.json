@@ -19,7 +19,7 @@
       "description": "Export/Import with diff in CP"
     },
     "branch-alias": {
-      "dev-main": "0.1-dev"
+      "dev-main": "0.1.2-dev"
     }
   },
   "require": {

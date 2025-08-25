@@ -11,8 +11,6 @@ class ContentSyncServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__ . '/../config/content-sync.php', 'content-sync');
-
-        // (Optional) bind custom services here if you wire the SOLID layer
     }
 
     public function boot(): void
@@ -29,14 +27,18 @@ class ContentSyncServiceProvider extends ServiceProvider
             ], 'content-sync-config');
         }
 
-        // Load routes, views
+        // Load routes & views
         $this->loadRoutesFrom(__DIR__ . '/../routes/cp.php');
         $this->loadViewsFrom(__DIR__ . '/../resources/views', 'statamic-content-sync');
 
-        // Register CP JS
-        Statamic::script('content-sync', __DIR__ . '/../resources/dist/js/content-sync.js');
+        // ✅ Register CP JS correctly (vendor handle + relative filename)
+        // This will load: public/vendor/statamic-content-sync/js/content-sync.js
+        Statamic::script('statamic-content-sync', 'content-sync.js');
 
-        // ✅ Register Control Panel Utility
+        // (If you also have CSS, uncomment)
+        // Statamic::style('statamic-content-sync', 'content-sync.css');
+
+        // Register the CP Utility
         Utility::extend(function () {
             Utility::register('content_sync')
                 ->title('Content Sync')
@@ -45,7 +47,7 @@ class ContentSyncServiceProvider extends ServiceProvider
                 ->view('statamic-content-sync::utility');
         });
 
-        // Optionally publish built assets
+        // Publish built assets to the expected public path
         $this->publishes([
             __DIR__ . '/../resources/dist' => public_path('vendor/statamic-content-sync'),
         ], 'content-sync-assets');

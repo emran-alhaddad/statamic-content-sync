@@ -1,0 +1,49 @@
+{
+  "name": "emran-alhaddad/statamic-content-sync",
+  "description": "Export/import Statamic Entries, Navigation, Taxonomies, Assets, Globals with a CP UI and diff preview.",
+  "type": "statamic-addon",
+  "license": "MIT",
+  "autoload": {
+    "psr-4": {
+      "EmranAlhaddad\\ContentSync\\": "src/"
+    }
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "EmranAlhaddad\\ContentSync\\ContentSyncServiceProvider"
+      ]
+    },
+    "statamic": {
+      "name": "Content Sync UI",
+      "description": "Export/Import with diff in CP"
+    },
+    "branch-alias": {
+      "dev-main": "0.1-dev"
+    }
+  },
+  "require": {
+    "php": "^8.1",
+    "laravel/framework": "^10.0|^11.0",
+    "statamic/cms": "^5.0"
+  },
+  "require-dev": {
+    "laravel/pint": "^1.13"
+  },
+  "minimum-stability": "dev",
+  "prefer-stable": true,
+  "homepage": "https://github.com/emran-alhaddad/statamic-content-sync",
+  "keywords": [
+    "statamic",
+    "export",
+    "import",
+    "diff",
+    "laravel",
+    "content",
+    "sync"
+  ],
+  "support": {
+    "issues": "https://github.com/emran-alhaddad/statamic-content-sync/issues",
+    "source": "https://github.com/emran-alhaddad/statamic-content-sync"
+  }
+}

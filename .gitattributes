@@ -1,0 +1,10 @@
+# .gitattributes
+/tests export-ignore
+/.github export-ignore
+/.idea export-ignore
+/.vscode export-ignore
+/.editorconfig export-ignore
+/.prettierrc export-ignore
+/vite.config.js export-ignore
+/package.json export-ignore
+/package-lock.json export-ignore

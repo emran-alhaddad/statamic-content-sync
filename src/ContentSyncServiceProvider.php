@@ -33,8 +33,8 @@ class ContentSyncServiceProvider extends ServiceProvider
 
         // ✅ Register CP JS correctly (vendor handle + relative filename)
         // This will load: public/vendor/statamic-content-sync/js/content-sync.js
-        Statamic::script('statamic-content-sync', 'content-sync.js');
-        Statamic::style('statamic-content-sync', 'css/content-sync.css'); 
+        Statamic::script('statamic-content-sync', 'js/content-sync.js');
+        Statamic::style('statamic-content-sync', 'css/content-sync.css');
 
         // (If you also have CSS, uncomment)
         // Statamic::style('statamic-content-sync', 'content-sync.css');

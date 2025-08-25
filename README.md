@@ -16,7 +16,7 @@ php artisan vendor:publish --tag=content-sync-config
 npm i && npm run build
 php artisan statamic:stache:refresh && php artisan cache:clear
 Open Utilities → Content Sync in the CP.
-
+```
 ## .env (optional)
 
 CONTENT_SYNC_DISK=local

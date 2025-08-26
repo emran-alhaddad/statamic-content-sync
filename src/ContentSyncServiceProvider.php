@@ -44,6 +44,7 @@ class ContentSyncServiceProvider extends ServiceProvider
             Utility::register('content_sync')
                 ->title('Content Sync')
                 ->navTitle('Content Sync')
+                ->description('Export & import Collections, Navigation, Taxonomies, Globals and Asset metadata with diff/merge.')
                 ->icon('history')
                 ->view('statamic-content-sync::utility');
         });

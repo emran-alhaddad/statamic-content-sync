@@ -9,7 +9,7 @@
                 Select All Handles
             </button>
         </div>
-
+<br>
         <div class="cs-grid-2">
             <div>
                 <label class="cs-label">Type</label>
@@ -21,8 +21,8 @@
                 <input v-model="since" class="cs-input" placeholder="2025-01-01T00:00:00+03:00" />
             </div>
         </div>
-
-        <div class="cs-grid-2">
+<br>
+        <div class="">
             <div>
                 <label class="cs-label">Select {{ prettyType }}</label>
                 <div class="flex gap-2">

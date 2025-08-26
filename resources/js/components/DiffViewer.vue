@@ -1,10 +1,10 @@
 <template>
-    <div class="mt-4 grid gap-3" style="grid-template-columns: 1fr 1fr;">
+    <div class="mt-4 mb-4" style="grid-template-columns: 1fr 1fr;">
         <div>
             <div class="font-semibold mb-1 text-slate-800">Current</div>
             <pre class="cs-pre">{{ pretty(current) }}</pre>
         </div>
-        <div>
+        <div class="mt-4">
             <div class="font-semibold mb-1 text-slate-800">Incoming</div>
             <pre class="cs-pre">{{ pretty(incoming) }}</pre>
         </div>

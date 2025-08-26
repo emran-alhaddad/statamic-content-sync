@@ -7,13 +7,17 @@
   }
   
   .cs-title {
-    font-weight: 700;
+    font-weight: 500;
     font-size: 1.125rem;
     letter-spacing: .2px;
     color: #0f172a;
   }
   
-  .cs-subtle { color: #667085; }
+  .cs-subtle { 
+    color: #667085;
+    font-size: 12px;
+    margin-bottom: .50rem;
+    display: inline-block;}
   
   .cs-tabbar {
     display: inline-flex;
@@ -32,7 +36,7 @@
   .cs-tab + .cs-tab { border-left: 1px solid #e5e7eb; }
   .cs-tab.active { background: #f6faff; color: #0f172a; }
   
-  .cs-label { font-weight: 600; color: #0f172a; margin-bottom: .35rem; display:block; }
+  .cs-label { font-weight: 400; color: #0f172a; margin-bottom: .35rem; display:block; }
   .cs-input, .cs-select {
     width: 100%;
     border: 1px solid #e5e7eb;

@@ -1,5 +1,5 @@
 <template>
-    <div class="card p-6 space-y-5">
+    <div class="content-sync-import card p-6 space-y-5">
         <div class="flex items-start justify-between flex-wrap gap-4">
             <div>
                 <div class="font-bold text-lg">Import</div>
@@ -23,7 +23,7 @@
         </div>
 
         <div v-if="filteredGroups">
-            <!-- Strategy controls -->
+            <!-- Strategy -->
             <div class="flex flex-wrap items-end gap-4 mb-4">
                 <div>
                     <label class="block font-medium mb-1">Review strategy</label>
@@ -46,7 +46,6 @@
 
             <!-- Accordions: handle -> site -> items -->
             <div v-for="(sites, handle) in filteredGroups" :key="handle" class="mb-3 border rounded">
-                <!-- Handle header -->
                 <button class="w-full flex items-center justify-between px-3 py-2 bg-gray-100 hover:bg-gray-200"
                     @click="toggle(handle)">
                     <div class="font-semibold">
@@ -57,7 +56,6 @@
 
                 <div v-show="isOpen(handle)" class="p-3 pt-2">
                     <div v-for="(items, site) in sites" :key="handle + '::' + site" class="mb-2 border rounded">
-                        <!-- Site header -->
                         <button class="w-full flex items-center justify-between px-3 py-2 bg-gray-50 hover:bg-gray-100"
                             @click="toggle(handle + '::' + site)">
                             <div>
@@ -91,7 +89,7 @@
                                 <!-- Item body -->
                                 <div v-show="isOpen('item::' + it.key)" class="px-3 pb-3 space-y-3">
                                     <template v-if="strategy === 'manual'">
-                                        <!-- SIDE BY SIDE ALWAYS -->
+                                        <!-- SIDE BY SIDE -->
                                         <div class="flex flex-nowrap gap-3">
                                             <div class="basis-1/2 min-w-0">
                                                 <div class="text-gray-700 font-semibold mb-1">Current</div>
@@ -106,8 +104,8 @@
                                         <!-- FINAL MERGE BELOW -->
                                         <div class="mt-3">
                                             <div class="text-gray-700 font-semibold mb-1">Final merge</div>
-                                            <pre
-                                                class="code-block">{{ pretty(finalMerge(it, decisions[it.key] || 'incoming')) }}</pre>
+                                            <pre class="code-block"
+                                                v-html="renderFinalClean(it, decisions[it.key] || 'incoming')"></pre>
                                         </div>
                                     </template>
 
@@ -250,13 +248,14 @@ export default {
             return diff;
         },
 
+        // Renders highlight lines (full-line background) for CURRENT and INCOMING
         renderCurrentClean(item) {
             const lines = this.computeDiff(item).filter(d => d.status === 'removed' || d.status === 'changed').map(d => {
                 const cur = this.escape(typeof d.current === 'string' ? d.current : this.pretty(d.current));
                 const cls = d.status === 'removed' ? 'line-del' : 'line-chg';
                 return `<span class="${cls}">- ${d.path}: ${cur}</span>`;
             });
-            return lines.join('\n') || this.escape(this.pretty(this.relevantPair(item, this.type)[0]));
+            return lines.length ? lines.join('\n') : this.escape(this.pretty(this.relevantPair(item, this.type)[0]));
         },
         renderIncomingClean(item) {
             const lines = this.computeDiff(item).filter(d => d.status === 'added' || d.status === 'changed').map(d => {
@@ -264,7 +263,24 @@ export default {
                 const cls = d.status === 'added' ? 'line-add' : 'line-chg';
                 return `<span class="${cls}">+ ${d.path}: ${inc}</span>`;
             });
-            return lines.join('\n') || this.escape(this.pretty(this.relevantPair(item, this.type)[1]));
+            return lines.length ? lines.join('\n') : this.escape(this.pretty(this.relevantPair(item, this.type)[1]));
+        },
+
+        // Final merge renderer: highlight the keys that changed (amber), showing the chosen final value
+        renderFinalClean(item, decision) {
+            const merged = this.finalMerge(item, decision);
+            const diffs = this.computeDiff(item);
+            if (!diffs.length) return this.escape(this.pretty(merged));
+
+            const getByPath = (obj, path) => {
+                return path.split('.').reduce((o, k) => (o && typeof o === 'object') ? o[k] : undefined, obj);
+            };
+            const lines = diffs.map(d => {
+                const val = getByPath(merged, d.path);
+                const shown = (typeof val === 'string') ? this.escape(val) : this.escape(this.pretty(val));
+                return `<span class="line-chg">? ${d.path}: ${shown}</span>`;
+            });
+            return lines.join('\n');
         },
 
         finalMerge(item, decision) {
@@ -318,9 +334,9 @@ export default {
 };
 </script>
 
-<style scoped>
-/* Code blocks: ensure side-by-side columns never force wrap */
-.code-block {
+<!-- NOTE: not scoped; we prefix with .content-sync-import so v-html highlights work -->
+<style>
+.content-sync-import .code-block {
     background: #0b1220;
     color: #e5edff;
     border-radius: 12px;
@@ -331,10 +347,9 @@ export default {
     line-height: 1.45;
 }
 
-/* Full-line highlight */
-.line-add,
-.line-del,
-.line-chg {
+.content-sync-import .line-add,
+.content-sync-import .line-del,
+.content-sync-import .line-chg {
     display: block;
     padding: 2px 6px;
     border-radius: 6px;
@@ -342,49 +357,48 @@ export default {
     white-space: pre-wrap;
 }
 
-.line-add {
+.content-sync-import .line-add {
     background: rgba(16, 185, 129, .12);
     color: #10b981;
 }
 
 /* green */
-.line-del {
+.content-sync-import .line-del {
     background: rgba(239, 68, 68, .20);
     color: #fff;
 }
 
-/* strong red bar */
-.line-chg {
+/* red */
+.content-sync-import .line-chg {
     background: rgba(245, 158, 11, .15);
     color: #f59e0b;
 }
 
 /* amber */
 
-/* Badges + buttons */
-.badge {
+.content-sync-import .badge {
     font-size: .7rem;
     font-weight: 700;
     padding: .2rem .45rem;
     border-radius: 999px;
 }
 
-.badge-green {
+.content-sync-import .badge-green {
     background: #d1fae5;
     color: #065f46;
 }
 
-.badge-amber {
+.content-sync-import .badge-amber {
     background: #fde68a;
     color: #92400e;
 }
 
-.badge-gray {
+.content-sync-import .badge-gray {
     background: #e5e7eb;
     color: #374151;
 }
 
-.icon-btn {
+.content-sync-import .icon-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -395,7 +409,7 @@ export default {
     background: #fff;
 }
 
-.icon-btn:hover {
+.content-sync-import .icon-btn:hover {
     background: #f9fafb;
 }
 </style>

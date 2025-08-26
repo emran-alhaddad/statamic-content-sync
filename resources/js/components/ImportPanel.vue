@@ -28,7 +28,7 @@
                 <div>
                     <label class="block font-medium mb-1">Review strategy</label>
                     <v-select :options="strategyOptions" :reduce="o => o.value" v-model="strategy" :clearable="false"
-                        style="width: 180px" />
+                        style="width: 200px" />
                 </div>
 
                 <div v-if="strategy === 'auto'">
@@ -50,8 +50,7 @@
                 <button class="w-full flex items-center justify-between px-3 py-2 bg-gray-100 hover:bg-gray-200"
                     @click="toggle(handle)">
                     <div class="font-semibold">
-                        {{ handle }}
-                        <span class="text-gray-500">({{ totalInSites(sites) }})</span>
+                        {{ handle }} <span class="text-gray-500">({{ totalInSites(sites) }})</span>
                     </div>
                     <ChevronIcon :open="isOpen(handle)" />
                 </button>
@@ -95,11 +94,11 @@
                                         <div class="flex flex-wrap gap-3">
                                             <div class="flex-1 min-w-[300px]">
                                                 <div class="text-gray-700 font-semibold mb-1">Current</div>
-                                                <pre class="code-block" v-html="renderCurrent(it)"></pre>
+                                                <pre class="code-block" v-html="renderCurrentClean(it)"></pre>
                                             </div>
                                             <div class="flex-1 min-w-[300px]">
                                                 <div class="text-gray-700 font-semibold mb-1">Incoming</div>
-                                                <pre class="code-block" v-html="renderIncoming(it)"></pre>
+                                                <pre class="code-block" v-html="renderIncomingClean(it)"></pre>
                                             </div>
                                         </div>
 
@@ -177,22 +176,20 @@ export default {
     },
     computed: {
         /**
-         * Client-side filter: hide items where current === incoming.
-         * Also rebuild totalChanged.
+         * Hide items that have NO meaningful change:
+         * - collections: compare `data` + `published`
+         * - taxonomies/globals/assets: compare `data`
+         * - navigation: compare `tree`
          */
         filteredGroups() {
             if (!this.groups) return null;
             const out = {};
             let count = 0;
 
-            const isEqual = (a, b) => {
-                try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; }
-            };
-
             Object.entries(this.groups).forEach(([handle, sites]) => {
                 const siteMap = {};
                 Object.entries(sites).forEach(([site, items]) => {
-                    const filtered = (items || []).filter(it => !isEqual(it.current, it.incoming));
+                    const filtered = (items || []).filter(it => !this.isMeaningfullyUnchanged(it, this.type));
                     if (filtered.length) {
                         siteMap[site] = filtered;
                         count += filtered.length;
@@ -206,9 +203,11 @@ export default {
         },
     },
     methods: {
-        // ---------- UI helpers ----------
+        // ---------- open/close ----------
         isOpen(k) { return !!this.open[k]; },
         toggle(k) { this.$set(this.open, k, !this.open[k]); },
+
+        // ---------- small utils ----------
         totalInSites(sites) {
             return Object.values(sites).reduce((n, arr) => n + (Array.isArray(arr) ? arr.length : 0), 0);
         },
@@ -227,45 +226,116 @@ export default {
             const opt = this.acceptOptions.find(o => o.value === v);
             return opt ? opt.label : v;
         },
-
-        // ---------- Diff renderers (full-line highlighting, no unchanged noise) ----------
-        renderCurrent(item) {
-            if (!item || !item.diff || typeof item.diff !== 'object') {
-                return this.escape(this.pretty(item?.current ?? {}));
-            }
-            const lines = [];
-            Object.entries(item.diff).forEach(([path, detail]) => {
-                // Show only what matters on CURRENT pane: removed OR changed
-                if (detail.status === 'removed' || detail.status === 'changed') {
-                    const cur = this.escape(typeof detail.current === 'string'
-                        ? detail.current : this.pretty(detail.current));
-                    const cls = detail.status === 'removed' ? 'line-del' : 'line-chg';
-                    lines.push(`<span class="${cls}">- ${path}: ${cur}</span>`);
+        stableStringify(o) { // deterministic stringify to avoid key-order noise
+            const seen = new WeakSet();
+            const walk = (v) => {
+                if (v && typeof v === 'object') {
+                    if (seen.has(v)) return;
+                    seen.add(v);
+                    if (Array.isArray(v)) return v.map(walk);
+                    const out = {};
+                    Object.keys(v).sort().forEach(k => { out[k] = walk(v[k]); });
+                    return out;
                 }
-            });
-            return lines.length ? lines.join('\n') : this.escape(this.pretty(item.current ?? {}));
+                return v;
+            };
+            return JSON.stringify(walk(o));
         },
-        renderIncoming(item) {
-            if (!item || !item.diff || typeof item.diff !== 'object') {
-                return this.escape(this.pretty(item?.incoming ?? {}));
-            }
-            const lines = [];
-            Object.entries(item.diff).forEach(([path, detail]) => {
-                // Show only what matters on INCOMING pane: added OR changed
-                if (detail.status === 'added' || detail.status === 'changed') {
-                    const inc = this.escape(typeof detail.incoming === 'string'
-                        ? detail.incoming : this.pretty(detail.incoming));
-                    const cls = detail.status === 'added' ? 'line-add' : 'line-chg';
-                    lines.push(`<span class="${cls}">+ ${path}: ${inc}</span>`);
-                }
-            });
-            return lines.length ? lines.join('\n') : this.escape(this.pretty(item.incoming ?? {}));
+        deepEqual(a, b) {
+            try { return this.stableStringify(a) === this.stableStringify(b); } catch { return false; }
         },
 
-        // ---------- Merge logic ----------
+        // ---------- meaningful subset per type ----------
+        relevantPair(item, type) {
+            const c = item?.current ?? {};
+            const i = item?.incoming ?? {};
+
+            switch (type) {
+                case 'collections':
+                    return [
+                        { data: c.data ?? {}, published: 'published' in c ? !!c.published : undefined },
+                        { data: i.data ?? {}, published: 'published' in i ? !!i.published : undefined },
+                    ];
+                case 'taxonomies':
+                case 'globals':
+                case 'assets':
+                    return [{ data: c.data ?? {} }, { data: i.data ?? {} }];
+                case 'navigation':
+                    return [{ tree: c.tree ?? [] }, { tree: i.tree ?? [] }];
+                default:
+                    // Fallback: compare whole objects (but this should not happen)
+                    return [c, i];
+            }
+        },
+
+        isMeaningfullyUnchanged(item, type) {
+            const [rc, ri] = this.relevantPair(item, type);
+            return this.deepEqual(rc, ri);
+        },
+
+        // ---------- clean diff (only relevant fields) ----------
+        computeDiff(item) {
+            const [rc, ri] = this.relevantPair(item, this.type);
+
+            const diff = []; // { path, status, current, incoming }
+            const walk = (a, b, path = '') => {
+                const aIsObj = a && typeof a === 'object';
+                const bIsObj = b && typeof b === 'object';
+
+                if (!aIsObj && !bIsObj) {
+                    if (a !== b) {
+                        diff.push({ path, status: (a === undefined) ? 'added' : (b === undefined) ? 'removed' : 'changed', current: a, incoming: b });
+                    }
+                    return;
+                }
+
+                if (Array.isArray(a) || Array.isArray(b)) {
+                    // Treat arrays as atomic to avoid noise
+                    if (!this.deepEqual(a ?? [], b ?? [])) {
+                        diff.push({ path, status: (a === undefined) ? 'added' : (b === undefined) ? 'removed' : 'changed', current: a, incoming: b });
+                    }
+                    return;
+                }
+
+                const keys = new Set([...(a ? Object.keys(a) : []), ...(b ? Object.keys(b) : [])]);
+                [...keys].sort().forEach(k => {
+                    walk(a ? a[k] : undefined, b ? b[k] : undefined, path ? `${path}.${k}` : k);
+                });
+            };
+
+            walk(rc, ri, '');
+            return diff;
+        },
+
+        renderCurrentClean(item) {
+            const lines = this.computeDiff(item)
+                // current panel shows removed or changed
+                .filter(d => d.status === 'removed' || d.status === 'changed')
+                .map(d => {
+                    const cur = this.escape(typeof d.current === 'string' ? d.current : this.pretty(d.current));
+                    const cls = d.status === 'removed' ? 'line-del' : 'line-chg';
+                    return `<span class="${cls}">- ${d.path}: ${cur}</span>`;
+                });
+            return lines.join('\n') || this.escape(this.pretty(this.relevantPair(item, this.type)[0]));
+        },
+
+        renderIncomingClean(item) {
+            const lines = this.computeDiff(item)
+                // incoming panel shows added or changed
+                .filter(d => d.status === 'added' || d.status === 'changed')
+                .map(d => {
+                    const inc = this.escape(typeof d.incoming === 'string' ? d.incoming : this.pretty(d.incoming));
+                    const cls = d.status === 'added' ? 'line-add' : 'line-chg';
+                    return `<span class="${cls}">+ ${d.path}: ${inc}</span>`;
+                });
+            return lines.join('\n') || this.escape(this.pretty(this.relevantPair(item, this.type)[1]));
+        },
+
+        // ---------- merge logic ----------
         finalMerge(item, decision) {
-            if (decision === 'incoming') return item.incoming;
-            if (decision === 'current') return item.current;
+            const c = item.current, i = item.incoming;
+            if (decision === 'incoming') return i;
+            if (decision === 'current') return c;
 
             const merge = (a, b) => {
                 if (Array.isArray(a) && Array.isArray(b)) return b; // prefer incoming arrays
@@ -276,10 +346,10 @@ export default {
                 }
                 return b !== undefined ? b : a;
             };
-            return merge(item.current, item.incoming);
+            return merge(c, i);
         },
 
-        // ---------- File flow ----------
+        // ---------- file flow ----------
         onFile(e) {
             const f = e.target.files && e.target.files[0];
             if (!f) return;
@@ -295,17 +365,17 @@ export default {
                     this.type = res.type;
                     this.groups = res.groups || {};
 
-                    // Defaults for manual decisions
-                    if (this.strategy === 'manual') {
-                        Object.values(this.groups).forEach(sites => {
+                    // Defaults for manual decisions will be set after filtering (so we only default for changed items)
+                    // Open handles by default
+                    Object.keys(this.groups).forEach(h => this.$set(this.open, h, true));
+                    // Defer a tick to ensure filteredGroups computed
+                    this.$nextTick(() => {
+                        Object.values(this.filteredGroups || {}).forEach(sites => {
                             Object.values(sites).forEach(items => {
                                 items.forEach(it => this.$set(this.decisions, it.key, 'incoming'));
                             });
                         });
-                    }
-
-                    // Open top-level accordions by default
-                    Object.keys(this.groups).forEach(h => this.$set(this.open, h, true));
+                    });
                 })
                 .catch(err => {
                     this.error = err?.message || 'Failed to analyze file.';
@@ -315,7 +385,7 @@ export default {
                 });
         },
 
-        // ---------- Commit ----------
+        // ---------- commit ----------
         async commit() {
             if (this.totalChanged === 0) {
                 Statamic.$toast.info('Nothing to apply.');
@@ -329,7 +399,6 @@ export default {
                 if (this.strategy === 'auto') {
                     payload = { type: this.type, strategy: 'auto', auto_action: this.autoAction };
                 } else {
-                    // Build decisions only from filtered (changed) items
                     const decisions = [];
                     Object.values(this.filteredGroups).forEach(sites => {
                         Object.values(sites).forEach(items => {

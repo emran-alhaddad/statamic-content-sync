@@ -39,7 +39,8 @@
 
                 <div class="ml-auto">
                     <button class="btn-primary" :disabled="committing || totalChanged === 0" @click="commit">
-                        {{ committing ? 'Committing…' : (strategy === 'auto' ? 'Apply Auto Action' : 'Complete Import') }}
+                        {{ committing ? 'Committing…' : (strategy === 'auto' ? 'Apply Auto Action' : 'Complete Import')
+                        }}
                     </button>
                 </div>
             </div>
@@ -136,7 +137,8 @@
 </template>
 
 <script>
-import { previewImport, commitImport } from '../api';
+import { previewImport, commitImport } from '../api'
+import { diffLines } from 'diff'
 
 const ChevronIcon = {
     name: 'ChevronIcon',
@@ -174,7 +176,7 @@ export default {
                 { label: 'Accept Current changes', value: 'current' },
                 { label: 'Accept Both changes', value: 'both' },
             ],
-            contextLines: 6, // show N lines of context around each change (GitHub-like)
+            contextLines: 6,
         };
     },
     computed: {
@@ -208,7 +210,7 @@ export default {
         escape(v) { return String(v).replace(/[&<>]/g, s => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[s])); },
         labelFor(v) { const o = this.acceptOptions.find(o => o.value === v); return o ? o.label : v; },
 
-        // ---- Deep equal (stable) -------------------------------------------------
+        /* ---------- stable deep equal ---------- */
         stableStringify(o) {
             const seen = new WeakSet();
             const walk = v => {
@@ -223,11 +225,14 @@ export default {
         },
         deepEqual(a, b) { try { return this.stableStringify(a) === this.stableStringify(b); } catch { return false; } },
 
-        // ---- What constitutes equality per type ----------------------------------
+        /* ---------- subset used for diff per type ---------- */
         relevantPair(item, type) {
             const c = item?.current ?? {}, i = item?.incoming ?? {};
             switch (type) {
-                case 'collections': return [{ data: c.data ?? {}, published: 'published' in c ? !!c.published : undefined }, { data: i.data ?? {}, published: 'published' in i ? !!i.published : undefined }];
+                case 'collections': return [
+                    { data: c.data ?? {}, published: 'published' in c ? !!c.published : undefined },
+                    { data: i.data ?? {}, published: 'published' in i ? !!i.published : undefined }
+                ];
                 case 'taxonomies':
                 case 'globals':
                 case 'assets': return [{ data: c.data ?? {} }, { data: i.data ?? {} }];
@@ -240,177 +245,171 @@ export default {
             return this.deepEqual(rc, ri);
         },
 
-        // ---- Diff engine (key-path oriented) -------------------------------------
-        computeDiff(item) {
-            const [rc, ri] = this.relevantPair(item, this.type);
-            const diff = [];
-            const walk = (a, b, path = '') => {
-                const aObj = a && typeof a === 'object', bObj = b && typeof b === 'object';
-                if (!aObj && !bObj) { if (a !== b) diff.push({ path, status: (a === undefined) ? 'added' : (b === undefined) ? 'removed' : 'changed', current: a, incoming: b }); return; }
-                if (Array.isArray(a) || Array.isArray(b)) { if (!this.deepEqual(a ?? [], b ?? [])) diff.push({ path, status: (a === undefined) ? 'added' : (b === undefined) ? 'removed' : 'changed', current: a, incoming: b }); return; }
-                const keys = new Set([...(a ? Object.keys(a) : []), ...(b ? Object.keys(b) : [])]);[...keys].sort().forEach(k => walk(a ? a[k] : undefined, b ? b[k] : undefined, path ? `${path}.${k}` : k));
-            };
-            walk(rc, ri, '');
-            return diff;
-        },
-
-        // ---- Time precedence (+/- placement per panel) ---------------------------
-        toEpoch(val) {
-            if (val == null) return 0;
-            if (typeof val === 'number') return (val > 1e12) ? val : val * 1000;
-            if (typeof val === 'string') {
-                const n = Number(val);
-                if (!Number.isNaN(n)) return (n > 1e12) ? n : n * 1000;
-                const t = Date.parse(val); return Number.isNaN(t) ? 0 : t;
+        /* ---------- recency (which side gets '+') ---------- */
+        toEpoch(v) {
+            if (v == null) return 0;
+            if (typeof v === 'number') return (v > 1e12) ? v : v * 1000;
+            if (typeof v === 'string') {
+                const n = Number(v); if (!Number.isNaN(n)) return (n > 1e12) ? n : n * 1000;
+                const t = Date.parse(v); return Number.isNaN(t) ? 0 : t;
             }
             return 0;
         },
         itemEpoch(obj) {
-            // prefer top-level updated_at, fall back to data.updated_at
             return this.toEpoch(obj?.updated_at ?? obj?.data?.updated_at ?? 0);
         },
         fresherSide(item) {
             const cur = this.itemEpoch(item.current), inc = this.itemEpoch(item.incoming);
             if (cur > inc) return 'current';
             if (inc > cur) return 'incoming';
-            // tie-breaker: prefer incoming
             return 'incoming';
         },
 
-        // ---- Context windowing helpers -------------------------------------------
-        lastKeyFromPath(p) { const parts = p.split('.'); return parts[parts.length - 1]; },
-        findAllMatchIndexes(lines, key) {
-            const needle = `"${key}"`;
-            const idxs = [];
-            for (let i = 0; i < lines.length; i++) {
-                if (lines[i].includes(needle)) idxs.push(i);
-            }
-            return idxs;
-        },
-        mergeWindows(windows) {
-            if (!windows.length) return [];
-            windows.sort((a, b) => a[0] - b[0]);
-            const out = [windows[0].slice()];
-            for (let i = 1; i < windows.length; i++) {
-                const [s, e] = windows[i], last = out[out.length - 1];
-                if (s <= last[1] + 1) { last[1] = Math.max(last[1], e); } else out.push([s, e]);
-            }
-            return out;
-        },
-
-        // Build a panel with GitHub-like context and +/- per recency
-        renderPanelWithContext(item, side) {
-            const other = side === 'current' ? 'incoming' : 'current';
-            const obj = item[side] || {};
-            const json = this.pretty(this.relevantPair(item, this.type)[side === 'current' ? 0 : 1]);
-            const lines = json.split('\n');
-
-            const changes = this.computeDiff(item);
-            if (!changes.length) {
-                // no diffs under relevant subset – show nothing
-                return this.escape('(no changes)');
-            }
-
-            const keyHits = [];
-            const changeMap = {}; // lineIndex -> { type: 'add'|'del'|'chg', label:'+|-' }
+        /* ---------- line diff + hunks (no false positives) ---------- */
+        buildPanelHunks(item, side) {
+            const [rc, ri] = this.relevantPair(item, this.type);
+            const aStr = this.pretty(rc);
+            const bStr = this.pretty(ri);
+            const parts = diffLines(aStr, bStr); // diff current (a) -> incoming (b)
             const fresher = this.fresherSide(item);
 
-            // collect windows around each changed path (based on last key segment)
-            const context = this.contextLines;
-            changes.forEach(d => {
-                const key = this.lastKeyFromPath(d.path);
-                const idxs = this.findAllMatchIndexes(lines, key);
-                if (!idxs.length) {
-                    // fallback: highlight opening brace of the object
-                    idxs.push(Math.max(lines.findIndex(l => l.trim().endsWith('{')), 0));
-                }
-                idxs.forEach(idx => {
-                    keyHits.push([Math.max(0, idx - context), Math.min(lines.length - 1, idx + context)]);
-                    // Decide sign/color for this line in this panel
-                    let label = '?', type = 'chg';
-                    if (d.status === 'changed') {
-                        // fresher side gets '+', older gets '-'
-                        label = (side === fresher) ? '+' : '-';
-                        type = (side === fresher) ? 'add' : 'del';
-                    } else if (d.status === 'added') { // exists only in incoming subset
-                        if (side === 'incoming') { label = '+'; type = 'add'; } else { label = '-'; type = 'del'; }
-                    } else if (d.status === 'removed') { // exists only in current subset
-                        if (side === 'current') { label = '+'; type = 'add'; } else { label = '-'; type = 'del'; }
+            // Build lines for ONE panel; ignore lines that don't exist in that panel.
+            const lines = [];
+            for (const p of parts) {
+                const chunk = (p.value || '').split('\n');
+                if (chunk[chunk.length - 1] === '') chunk.pop();
+
+                if (p.added) {
+                    if (side === 'incoming') {
+                        // exists only in incoming
+                        const tag = (fresher === 'incoming') ? '+' : '-';
+                        chunk.forEach(line => lines.push({ tag, line }));
                     }
-                    changeMap[idx] = { type, label };
+                    // ignore in "current"
+                    continue;
+                }
+                if (p.removed) {
+                    if (side === 'current') {
+                        // exists only in current
+                        const tag = (fresher === 'current') ? '+' : '-';
+                        chunk.forEach(line => lines.push({ tag, line }));
+                    }
+                    // ignore in "incoming"
+                    continue;
+                }
+                // common
+                chunk.forEach(line => lines.push({ tag: ' ', line }));
+            }
+
+            // Create hunks: group changed lines with N lines of context
+            const context = this.contextLines;
+            const hunks = [];
+            let i = 0;
+            while (i < lines.length) {
+                if (lines[i].tag !== ' ') {
+                    const start = Math.max(0, i - context);
+                    let j = i;
+                    while (j < lines.length && lines[j].tag !== ' ') j++;
+                    const end = Math.min(lines.length, j + context);
+                    hunks.push(lines.slice(start, end));
+                    i = end;
+                } else {
+                    i++;
+                }
+            }
+            if (!hunks.length) {
+                // no change — show tiny message
+                return [[{ tag: ' ', line: '(no changes)' }]];
+            }
+            return hunks;
+        },
+
+        renderPanelWithContext(item, side) {
+            const hunks = this.buildPanelHunks(item, side);
+            const out = [];
+            hunks.forEach((h, idx) => {
+                if (idx > 0) out.push('<div class="hunk-gap">…</div>');
+                h.forEach(l => {
+                    if (l.tag === '+') out.push(`<span class="line-add">+ ${this.escape(l.line)}</span>`);
+                    else if (l.tag === '-') out.push(`<span class="line-del">- ${this.escape(l.line)}</span>`);
+                    else out.push(this.escape(l.line));
                 });
             });
-
-            const windows = this.mergeWindows(keyHits);
-            const out = [];
-            windows.forEach(([s, e], wi) => {
-                if (wi > 0) out.push('<div class="hunk-gap">…</div>');
-                for (let i = s; i <= e; i++) {
-                    const raw = lines[i];
-                    const mark = changeMap[i];
-                    if (mark) {
-                        const cls = mark.type === 'add' ? 'line-add' : mark.type === 'del' ? 'line-del' : 'line-chg';
-                        out.push(`<span class="${cls}">${this.escape(mark.label)} ${this.escape(raw)}</span>`);
-                    } else {
-                        out.push(this.escape(raw));
-                    }
-                }
-            });
-
             return out.join('\n');
         },
 
-        // Final merge with green highlights on the changed keys only
+        /* ---------- final merge (green lines only where different from chosen base) ---------- */
+        mergeFinal(current, incoming, decision) {
+            if (decision === 'incoming') return incoming;
+            if (decision === 'current') return current;
+            const merge = (a, b) => {
+                if (Array.isArray(a) && Array.isArray(b)) return b;
+                if (a && typeof a === 'object' && b && typeof b === 'object') {
+                    const out = { ...a };
+                    Object.keys(b).forEach(k => out[k] = merge(a?.[k], b[k]));
+                    return out;
+                }
+                return b !== undefined ? b : a;
+            };
+            return merge(current, incoming);
+        },
+
         renderFinalWithContext(item, decision) {
-            const merged = this.finalMerge(item, decision);
-            const json = this.pretty(merged);
-            const lines = json.split('\n');
+            const [rc, ri] = this.relevantPair(item, this.type);
+            const finalObj = this.mergeFinal(rc, ri, decision);
+            const baseStr = this.pretty(decision === 'incoming' ? ri : rc);
+            const finalStr = this.pretty(finalObj);
 
-            const changes = this.computeDiff(item);
-            if (!changes.length) return this.escape(json);
-
-            const context = this.contextLines;
-            const keyHits = [];
-            const markIdx = new Set();
-
-            changes.forEach(d => {
-                const key = this.lastKeyFromPath(d.path);
-                const idxs = this.findAllMatchIndexes(lines, key);
-                if (!idxs.length) {
-                    idxs.push(Math.max(lines.findIndex(l => l.trim().endsWith('{')), 0));
+            // Which line numbers in final are "added" vs the chosen base?
+            const parts = diffLines(baseStr, finalStr);
+            const addedLineIdxs = new Set();
+            let cursor = 0;
+            for (const p of parts) {
+                const lines = (p.value || '').split('\n');
+                if (lines[lines.length - 1] === '') lines.pop();
+                if (p.added) {
+                    for (let k = 0; k < lines.length; k++) addedLineIdxs.add(cursor + k);
                 }
-                idxs.forEach(idx => {
-                    keyHits.push([Math.max(0, idx - context), Math.min(lines.length - 1, idx + context)]);
-                    markIdx.add(idx);
-                });
-            });
+                if (!p.removed) cursor += lines.length; // only advance on final side
+            }
 
-            const windows = this.mergeWindows(keyHits);
+            const finalLines = finalStr.split('\n');
+            // Build hunks around added lines
+            const context = this.contextLines;
+            const windows = [];
+            const idxs = [...addedLineIdxs].sort((a, b) => a - b);
+            for (const idx of idxs) {
+                windows.push([Math.max(0, idx - context), Math.min(finalLines.length - 1, idx + context)]);
+            }
+            // merge windows
+            const merged = [];
+            if (windows.length) {
+                merged.push(windows[0].slice());
+                for (let i = 1; i < windows.length; i++) {
+                    const [s, e] = windows[i], last = merged[merged.length - 1];
+                    if (s <= last[1] + 1) last[1] = Math.max(last[1], e); else merged.push([s, e]);
+                }
+            }
+
             const out = [];
-            windows.forEach(([s, e], wi) => {
+            if (!merged.length) {
+                // No visible change lines in final (edge case).
+                finalLines.forEach((t, i) => out.push(this.escape(t)));
+                return out.join('\n');
+            }
+
+            merged.forEach(([s, e], wi) => {
                 if (wi > 0) out.push('<div class="hunk-gap">…</div>');
                 for (let i = s; i <= e; i++) {
-                    const raw = lines[i];
-                    if (markIdx.has(i)) {
-                        out.push(`<span class="line-final">+ ${this.escape(raw)}</span>`);
-                    } else {
-                        out.push(this.escape(raw));
-                    }
+                    const t = finalLines[i];
+                    if (addedLineIdxs.has(i)) out.push(`<span class="line-final">+ ${this.escape(t)}</span>`);
+                    else out.push(this.escape(t));
                 }
             });
-
             return out.join('\n');
         },
 
-        finalMerge(item, decision) {
-            const c = item.current, i = item.incoming;
-            if (decision === 'incoming') return i;
-            if (decision === 'current') return c;
-            const merge = (a, b) => { if (Array.isArray(a) && Array.isArray(b)) return b; if (a && typeof a === 'object' && b && typeof b === 'object') { const out = { ...a }; Object.keys(b).forEach(k => out[k] = merge(a[k], b[k])); return out; } return b !== undefined ? b : a; };
-            return merge(c, i);
-        },
         autoDefault(item) {
-            // if you switch manual->auto mid-review we pick fresher side as sensible default
             return this.fresherSide(item);
         },
 
@@ -474,7 +473,6 @@ export default {
     line-height: 1.45;
 }
 
-/* Full-line highlights */
 .content-sync-import .line-add,
 .content-sync-import .line-del,
 .content-sync-import .line-chg,
@@ -491,21 +489,18 @@ export default {
     color: #10b981;
 }
 
-/* green for + */
+/* + green */
 .content-sync-import .line-del {
     background: rgba(239, 68, 68, .20);
     color: #fff;
 }
 
-/* red for - */
+/* - red  */
 .content-sync-import .line-chg {
     background: rgba(245, 158, 11, .15);
     color: #f59e0b;
 }
 
-/* amber (fallback) */
-
-/* Final merge uses green to indicate accepted/affected lines */
 .content-sync-import .line-final {
     background: rgba(16, 185, 129, .18);
     color: #c7ffdf;

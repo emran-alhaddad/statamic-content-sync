@@ -2,18 +2,20 @@
     "name": "statamic-content-sync",
     "private": true,
     "scripts": {
-      "build": "vite build",
-      "dev": "vite build --watch",
-      "lint:php": "vendor/bin/pint -v",
-      "lint:js": "prettier --check .",
-      "format:js": "prettier --write ."
+        "build": "vite build",
+        "dev": "vite build --watch",
+        "lint:php": "vendor/bin/pint -v",
+        "lint:js": "prettier --check .",
+        "format:js": "prettier --write ."
     },
     "devDependencies": {
-      "@vitejs/plugin-vue2": "^2.3.3",
-      "prettier": "^3.3.3",
-      "vite": "^5.4.2",
-      "vue": "^2.7.16",
-      "vue-template-compiler": "^2.7.16"
+        "@vitejs/plugin-vue2": "^2.3.3",
+        "prettier": "^3.3.3",
+        "vite": "^5.4.2",
+        "vue": "^2.7.16",
+        "vue-template-compiler": "^2.7.16"
+    },
+    "dependencies": {
+        "diff": "^8.0.2"
     }
-  }
-  
+}

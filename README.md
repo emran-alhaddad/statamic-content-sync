@@ -7,7 +7,6 @@
 [![PHP](https://img.shields.io/packagist/php-v/emran-alhaddad/statamic-content-sync.svg)](https://www.php.net/)
 ![Laravel](https://img.shields.io/badge/Laravel-10%2F11-FF2D20?logo=laravel&logoColor=white)
 ![Statamic](https://img.shields.io/badge/Statamic-v5-161F6D)
-[![CI](https://github.com/emran-alhaddad/statamic-content-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/emran-alhaddad/statamic-content-sync/actions)
 [![GitHub stars](https://img.shields.io/github/stars/emran-alhaddad/statamic-content-sync?style=social)](https://github.com/emran-alhaddad/statamic-content-sync)
 
 Export/import **Collections, Navigation, Taxonomies, Assets, Globals** with a Statamic Control Panel UI. See diffs like Git, choose **Accept incoming** or **Keep current** per item, then commit the import safely.

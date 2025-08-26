@@ -3,8 +3,8 @@
         <div class="flex items-start justify-between flex-wrap gap-4">
             <div>
                 <div class="font-bold text-lg">Import</div>
-                <div class="text-gray-600">Upload an exported JSON. We verify integrity, show only affected items, and
-                    compute a final merge per item.</div>
+                <div class="text-gray-600">Upload an exported JSON. We verify integrity, group by handle &amp; site, and
+                    show only changed items.</div>
             </div>
             <div class="flex items-center">
                 <input type="file" @change="onFile" accept="application/json,.json" />
@@ -15,48 +15,78 @@
             <loading-graphic />
             <div class="mt-2 text-gray-600">Analyzing…</div>
         </div>
+        <div v-if="error" class="text-red-700 bg-red-50 border border-red-200 rounded p-3">{{ error }}</div>
 
-        <div v-if="error" class="text-red-700 bg-red-50 border border-red-200 rounded p-3">
-            {{ error }}
-        </div>
-
-        <div v-if="diffs && diffs.diffs && diffs.diffs.length">
-            <div class="mb-2 text-gray-600">Changed items: <b>{{ diffs.diffs.length }}</b></div>
-
-            <div v-for="item in diffs.diffs" :key="item.key" class="border rounded p-3 mb-4">
-                <div class="flex items-center justify-between mb-2">
-                    <div class="font-semibold">
-                        {{ item.key }}
-                        <span class="badge" :class="badge(item.status)">{{ item.status }}</span>
-                    </div>
-                    <div class="flex items-center gap-2">
-                        <label class="sr-only">Decision</label>
-                        <v-select :options="['incoming', 'current', 'both']" :clearable="false"
-                            v-model="decisions[item.key]" style="width: 170px" />
-                    </div>
+        <div v-if="groups">
+            <!-- Strategy -->
+            <div class="flex flex-wrap items-end gap-4 mb-4">
+                <div>
+                    <label class="block font-medium mb-1">Review strategy</label>
+                    <v-select :options="['manual', 'auto']" v-model="strategy" :clearable="false" style="width: 160px" />
                 </div>
-
-                <!-- side-by-side current vs incoming, final merge below -->
-                <div class="flex flex-wrap gap-3">
-                    <div class="flex-1 min-w-[300px]">
-                        <div class="text-gray-700 font-semibold mb-1">Current</div>
-                        <pre class="code-block" v-html="renderCurrent(item)"></pre>
-                    </div>
-                    <div class="flex-1 min-w-[300px]">
-                        <div class="text-gray-700 font-semibold mb-1">Incoming</div>
-                        <pre class="code-block" v-html="renderIncoming(item)"></pre>
-                    </div>
+                <div v-if="strategy === 'auto'">
+                    <label class="block font-medium mb-1">Auto action</label>
+                    <v-select :options="['incoming', 'current', 'both']" v-model="autoAction" :clearable="false"
+                        style="width: 200px" />
                 </div>
-
-                <div class="mt-3">
-                    <div class="text-gray-700 font-semibold mb-1">Final merge</div>
-                    <pre class="code-block">{{ pretty(finalMerge(item)) }}</pre>
+                <div class="ml-auto">
+                    <button class="btn-primary" :disabled="committing" @click="commit">
+                        {{ committing ? 'Committing…' : (strategy === 'auto' ? 'Apply Auto Action' : 'Complete Import') }}
+                    </button>
                 </div>
             </div>
 
-            <div class="pt-2">
-                <button class="btn-primary" :disabled="committing" @click="commit">{{ committing ? 'Committing…' :
-                    'Complete Import' }}</button>
+            <!-- Accordions (handle -> site) -->
+            <div v-for="(sites, handle) in groups" :key="handle" class="mb-3">
+                <div class="bg-gray-100 rounded px-3 py-2 font-semibold cursor-pointer" @click="toggle(handle)">
+                    {{ handle }} <span class="text-gray-500">({{ totalInSites(sites) }})</span>
+                </div>
+                <div v-show="open[handle]" class="mt-2">
+                    <div v-for="(items, site) in sites" :key="handle + '::' + site" class="mb-2">
+                        <div class="bg-gray-50 rounded px-3 py-2 cursor-pointer" @click="toggle(handle + '::' + site)">
+                            <span class="font-medium">Site:</span> {{ site }} <span class="text-gray-500">({{
+                                items.length }})</span>
+                        </div>
+
+                        <div v-show="open[handle + '::' + site]" class="mt-2 space-y-3">
+                            <div v-for="it in items" :key="it.key" class="border rounded p-3">
+                                <div class="flex items-center justify-between mb-2">
+                                    <div class="font-semibold">{{ it.key }}
+                                        <span class="badge" :class="badge(it.status)">{{ it.status }}</span>
+                                    </div>
+
+                                    <div v-if="strategy === 'manual'" class="flex items-center gap-2">
+                                        <v-select :options="['incoming', 'current', 'both']" :clearable="false"
+                                            v-model="decisions[it.key]" style="width: 170px" />
+                                    </div>
+                                </div>
+
+                                <template v-if="strategy === 'manual'">
+                                    <div class="flex flex-wrap gap-3">
+                                        <div class="flex-1 min-w-[300px]">
+                                            <div class="text-gray-700 font-semibold mb-1">Current</div>
+                                            <pre class="code-block" v-html="renderCurrent(it)"></pre>
+                                        </div>
+                                        <div class="flex-1 min-w-[300px]">
+                                            <div class="text-gray-700 font-semibold mb-1">Incoming</div>
+                                            <pre class="code-block" v-html="renderIncoming(it)"></pre>
+                                        </div>
+                                    </div>
+
+                                    <div class="mt-3">
+                                        <div class="text-gray-700 font-semibold mb-1">Final merge</div>
+                                        <pre
+                                            class="code-block">{{ pretty(finalMerge(it, decisions[it.key] || 'incoming')) }}</pre>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div v-if="strategy === 'auto'" class="text-gray-600 text-sm">
+                All {{ totalChanged }} changed items will be applied as <b>{{ autoAction }}</b>.
             </div>
         </div>
     </div>
@@ -67,82 +97,61 @@ import { previewImport, commitImport } from '../api';
 
 export default {
     data() {
-        return { loading: false, error: '', diffs: null, decisions: {}, committing: false };
+        return {
+            loading: false, error: '', groups: null, type: '', open: {},
+            strategy: 'manual', autoAction: 'incoming', decisions: {}, committing: false, totalChanged: 0
+        };
     },
     methods: {
+        toggle(k) { this.$set(this.open, k, !this.open[k]); },
+        totalInSites(sites) { return Object.values(sites).reduce((n, arr) => n + arr.length, 0); },
         onFile(e) {
-            const f = e.target.files[0];
-            if (!f) return;
-            this.error = ''; this.diffs = null;
-            this.loading = true;
-            previewImport(f)
-                .then(res => {
-                    this.diffs = res;
-                    // default all to incoming
-                    this.decisions = Object.fromEntries(res.diffs.map(d => [d.key, 'incoming']));
-                })
-                .catch(err => { this.error = err.message || 'Failed to analyze file.'; })
-                .finally(() => { this.loading = false; });
+            const f = e.target.files[0]; if (!f) return;
+            this.loading = true; this.error = ''; this.groups = null; this.decisions = {};
+            previewImport(f).then(res => {
+                this.type = res.type;
+                this.groups = res.groups || {};
+                this.totalChanged = Object.values(this.groups).reduce((n, sites) => n + this.totalInSites(sites), 0);
+                // default manual decisions
+                Object.values(this.groups).forEach(sites => {
+                    Object.values(sites).forEach(items => {
+                        items.forEach(it => this.$set(this.decisions, it.key, 'incoming'));
+                    });
+                });
+            }).catch(err => { this.error = err.message || 'Failed to analyze file.'; })
+                .finally(() => this.loading = false);
         },
-        badge(status) { return status === 'create' ? 'badge-green' : status === 'update' ? 'badge-amber' : 'badge-gray'; },
-        pretty(o) { return JSON.stringify(o, null, 2); },
-
-        // diff renderers with -, ?, +
-        renderCurrent(item) {
-            const lines = [];
-            for (const [path, detail] of Object.entries(item.diff)) {
-                if (detail.status === 'removed') lines.push(`<span class="line-del">- ${path}: ${this.escape(detail.current)}</span>`);
-                else if (detail.status === 'changed') lines.push(`<span class="line-chg">? ${path}: ${this.escape(detail.current)}</span>`);
-                else if (detail.status === 'added') lines.push(`<span class="line-ctx">  ${path}: (unchanged in current)</span>`);
-            }
-            return lines.join('\n') || this.escape(this.pretty(item.current));
-        },
-        renderIncoming(item) {
-            const lines = [];
-            for (const [path, detail] of Object.entries(item.diff)) {
-                if (detail.status === 'added') lines.push(`<span class="line-add">+ ${path}: ${this.escape(detail.incoming)}</span>`);
-                else if (detail.status === 'changed') lines.push(`<span class="line-chg">? ${path}: ${this.escape(detail.incoming)}</span>`);
-                else if (detail.status === 'removed') lines.push(`<span class="line-ctx">  ${path}: (unchanged in incoming)</span>`);
-            }
-            return lines.join('\n') || this.escape(this.pretty(item.incoming));
-        },
-        escape(v) {
-            return String(typeof v === 'string' ? v : JSON.stringify(v)).replace(/[&<>]/g, s => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[s]));
-        },
-        finalMerge(item) {
-            const decision = this.decisions[item.key] || 'incoming';
+        // … keep the same pretty(), renderCurrent(), renderIncoming() from before …
+        finalMerge(item, decision) {
             if (decision === 'incoming') return item.incoming;
             if (decision === 'current') return item.current;
-            // both: deep merge (incoming wins on conflict)
             const merge = (a, b) => {
-                if (Array.isArray(a) && Array.isArray(b)) return b; // keep incoming array
-                if (a && typeof a === 'object' && b && typeof b === 'object') {
-                    const out = { ...a };
-                    Object.keys(b).forEach(k => out[k] = merge(a[k], b[k]));
-                    return out;
-                }
+                if (Array.isArray(a) && Array.isArray(b)) return b;
+                if (a && typeof a === 'object' && b && typeof b === 'object') { const out = { ...a }; Object.keys(b).forEach(k => out[k] = merge(a[k], b[k])); return out; }
                 return b !== undefined ? b : a;
             };
             return merge(item.current, item.incoming);
         },
+        badge(s) { return s === 'create' ? 'badge-green' : s === 'update' ? 'badge-amber' : 'badge-gray'; },
         async commit() {
             this.committing = true;
             try {
-                const payload = {
-                    type: this.diffs.type,
-                    decisions: this.diffs.diffs.map(d => ({
-                        key: d.key,
-                        action: this.decisions[d.key] || 'incoming',
-                        incoming: d.incoming
-                    }))
-                };
+                let payload;
+                if (this.strategy === 'auto') {
+                    payload = { type: this.type, strategy: 'auto', auto_action: this.autoAction };
+                } else {
+                    const decisions = [];
+                    Object.values(this.groups).forEach(sites => {
+                        Object.values(sites).forEach(items => {
+                            items.forEach(it => decisions.push({ key: it.key, action: this.decisions[it.key] || 'incoming' }));
+                        });
+                    });
+                    payload = { type: this.type, strategy: 'manual', decisions };
+                }
                 const res = await commitImport(payload);
                 Statamic.$toast.success(`Updated ${res.results.updated}, Created ${res.results.created}, Skipped ${res.results.skipped}`);
-            } catch (e) {
-                Statamic.$toast.error(e.message || 'Commit failed.');
-            } finally {
-                this.committing = false;
-            }
+            } catch (e) { Statamic.$toast.error(e.message || 'Commit failed.'); }
+            finally { this.committing = false; }
         }
     }
 };
@@ -163,17 +172,14 @@ export default {
     color: #16a34a;
 }
 
-/* + */
 .line-del {
     color: #dc2626;
 }
 
-/* - */
 .line-chg {
     color: #b45309;
 }
 
-/* ? */
 .line-ctx {
     color: #94a3b8;
 }

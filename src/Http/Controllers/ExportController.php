@@ -4,16 +4,27 @@ namespace EmranAlhaddad\ContentSync\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
-use Illuminate\Support\Facades\Storage;
-use Statamic\Facades\Collection;
-use Statamic\Facades\Taxonomy;
-use Statamic\Facades\Nav;
-use Statamic\Facades\GlobalSet;
-use Statamic\Facades\AssetContainer;
-use Statamic\Facades\Entry;
+use Illuminate\Support\Carbon;
 
 class ExportController extends Controller
 {
+
+    protected function updatedIso($obj): ?string
+    {
+        try {
+            if (method_exists($obj, 'model') && $obj->model()) {
+                $u = $obj->model()->updated_at ?? null;
+                return $u ? Carbon::parse($u)->toIso8601String() : null;
+            }
+            if (method_exists($obj, 'lastModified')) {
+                $u = $obj->lastModified(); // Statamic data objects
+                return $u ? Carbon::parse($u)->toIso8601String() : null;
+            }
+        } catch (\Throwable $e) {
+        }
+        return null;
+    }
+
     public function options(Request $request)
     {
         $type = $request->string('type')->toString();
@@ -86,7 +97,7 @@ class ExportController extends Controller
                     'site'       => $siteHandle,
                     'slug'       => (string)$e->slug(),
                     'published'  => (bool)$e->published(),
-                    'updated_at' => optional($e->model()?->updated_at)->toIso8601String(),
+                    'updated_at' => $this->updatedIso($e), 
                     'data'       => $e->data()->all(),
                 ];
             });
@@ -106,7 +117,7 @@ class ExportController extends Controller
                     'site'       => $t->site(),
                     'slug'       => (string)$t->slug(),
                     'data'       => $t->data()->all(),
-                    'updated_at' => optional($t->model()?->updated_at)->toIso8601String(),
+                    'updated_at' => $this->updatedIso($t),
                 ]));
             }
         }
@@ -120,7 +131,7 @@ class ExportController extends Controller
                         'handle'     => $nav,
                         'site'       => $tree->site(),
                         'tree'       => $tree->tree(),
-                        'updated_at' => now()->toIso8601String(),
+                        'updated_at' => $this->updatedIso($tree) ?? now()->toIso8601String(),
                     ]);
                 }
             }
@@ -136,7 +147,7 @@ class ExportController extends Controller
                         'handle'     => $set,
                         'site'       => $siteHandle,
                         'data'       => $loc->data()->all(),
-                        'updated_at' => optional($loc->model()?->updated_at)->toIso8601String(),
+                        'updated_at' => $this->updatedIso($loc), 
                     ]);
                 }
             }
@@ -151,7 +162,7 @@ class ExportController extends Controller
                         'container'  => $c,
                         'path'       => $a->path(),
                         'data'       => $a->data()->all(),
-                        'updated_at' => optional($a->model()?->updated_at)->toIso8601String(),
+                        'updated_at' => $this->updatedIso($a), 
                     ]);
                 }
             }

@@ -91,17 +91,19 @@
                                 <!-- Item body -->
                                 <div v-show="isOpen('item::' + it.key)" class="px-3 pb-3 space-y-3">
                                     <template v-if="strategy === 'manual'">
-                                        <div class="flex flex-wrap gap-3">
-                                            <div class="flex-1 min-w-[300px]">
+                                        <!-- SIDE BY SIDE ALWAYS -->
+                                        <div class="flex flex-nowrap gap-3">
+                                            <div class="basis-1/2 min-w-0">
                                                 <div class="text-gray-700 font-semibold mb-1">Current</div>
                                                 <pre class="code-block" v-html="renderCurrentClean(it)"></pre>
                                             </div>
-                                            <div class="flex-1 min-w-[300px]">
+                                            <div class="basis-1/2 min-w-0">
                                                 <div class="text-gray-700 font-semibold mb-1">Incoming</div>
                                                 <pre class="code-block" v-html="renderIncomingClean(it)"></pre>
                                             </div>
                                         </div>
 
+                                        <!-- FINAL MERGE BELOW -->
                                         <div class="mt-3">
                                             <div class="text-gray-700 font-semibold mb-1">Final merge</div>
                                             <pre
@@ -155,12 +157,12 @@ export default {
         return {
             loading: false,
             error: '',
-            groups: null,       // raw groups from server { handle: { site: [ items... ] } }
+            groups: null,
             type: '',
-            open: {},           // accordion state
-            strategy: 'manual', // 'manual' | 'auto'
+            open: {},
+            strategy: 'manual',
             autoAction: 'incoming',
-            decisions: {},      // { key: 'incoming'|'current'|'both' }
+            decisions: {},
             committing: false,
             totalChanged: 0,
             strategyOptions: [
@@ -175,12 +177,6 @@ export default {
         };
     },
     computed: {
-        /**
-         * Hide items that have NO meaningful change:
-         * - collections: compare `data` + `published`
-         * - taxonomies/globals/assets: compare `data`
-         * - navigation: compare `tree`
-         */
         filteredGroups() {
             if (!this.groups) return null;
             const out = {};
@@ -203,199 +199,105 @@ export default {
         },
     },
     methods: {
-        // ---------- open/close ----------
         isOpen(k) { return !!this.open[k]; },
         toggle(k) { this.$set(this.open, k, !this.open[k]); },
+        totalInSites(sites) { return Object.values(sites).reduce((n, arr) => n + (Array.isArray(arr) ? arr.length : 0), 0); },
+        badge(s) { return s === 'create' ? 'badge-green' : s === 'update' ? 'badge-amber' : 'badge-gray'; },
+        pretty(o) { try { return JSON.stringify(o, null, 2); } catch { return String(o); } },
+        escape(v) { return String(v).replace(/[&<>]/g, s => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[s])); },
+        labelFor(v) { const o = this.acceptOptions.find(o => o.value === v); return o ? o.label : v; },
 
-        // ---------- small utils ----------
-        totalInSites(sites) {
-            return Object.values(sites).reduce((n, arr) => n + (Array.isArray(arr) ? arr.length : 0), 0);
-        },
-        badge(status) {
-            return status === 'create' ? 'badge-green'
-                : status === 'update' ? 'badge-amber'
-                    : 'badge-gray';
-        },
-        pretty(o) {
-            try { return JSON.stringify(o, null, 2); } catch { return String(o); }
-        },
-        escape(v) {
-            return String(v).replace(/[&<>]/g, s => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[s]));
-        },
-        labelFor(v) {
-            const opt = this.acceptOptions.find(o => o.value === v);
-            return opt ? opt.label : v;
-        },
-        stableStringify(o) { // deterministic stringify to avoid key-order noise
+        stableStringify(o) {
             const seen = new WeakSet();
-            const walk = (v) => {
+            const walk = v => {
                 if (v && typeof v === 'object') {
                     if (seen.has(v)) return;
                     seen.add(v);
                     if (Array.isArray(v)) return v.map(walk);
-                    const out = {};
-                    Object.keys(v).sort().forEach(k => { out[k] = walk(v[k]); });
-                    return out;
-                }
-                return v;
+                    const out = {}; Object.keys(v).sort().forEach(k => out[k] = walk(v[k])); return out;
+                } return v;
             };
             return JSON.stringify(walk(o));
         },
-        deepEqual(a, b) {
-            try { return this.stableStringify(a) === this.stableStringify(b); } catch { return false; }
-        },
+        deepEqual(a, b) { try { return this.stableStringify(a) === this.stableStringify(b); } catch { return false; } },
 
-        // ---------- meaningful subset per type ----------
         relevantPair(item, type) {
-            const c = item?.current ?? {};
-            const i = item?.incoming ?? {};
-
+            const c = item?.current ?? {}, i = item?.incoming ?? {};
             switch (type) {
-                case 'collections':
-                    return [
-                        { data: c.data ?? {}, published: 'published' in c ? !!c.published : undefined },
-                        { data: i.data ?? {}, published: 'published' in i ? !!i.published : undefined },
-                    ];
+                case 'collections': return [{ data: c.data ?? {}, published: 'published' in c ? !!c.published : undefined }, { data: i.data ?? {}, published: 'published' in i ? !!i.published : undefined }];
                 case 'taxonomies':
                 case 'globals':
-                case 'assets':
-                    return [{ data: c.data ?? {} }, { data: i.data ?? {} }];
-                case 'navigation':
-                    return [{ tree: c.tree ?? [] }, { tree: i.tree ?? [] }];
-                default:
-                    // Fallback: compare whole objects (but this should not happen)
-                    return [c, i];
+                case 'assets': return [{ data: c.data ?? {} }, { data: i.data ?? {} }];
+                case 'navigation': return [{ tree: c.tree ?? [] }, { tree: i.tree ?? [] }];
+                default: return [c, i];
             }
         },
-
         isMeaningfullyUnchanged(item, type) {
             const [rc, ri] = this.relevantPair(item, type);
             return this.deepEqual(rc, ri);
         },
 
-        // ---------- clean diff (only relevant fields) ----------
         computeDiff(item) {
             const [rc, ri] = this.relevantPair(item, this.type);
-
-            const diff = []; // { path, status, current, incoming }
+            const diff = [];
             const walk = (a, b, path = '') => {
-                const aIsObj = a && typeof a === 'object';
-                const bIsObj = b && typeof b === 'object';
-
-                if (!aIsObj && !bIsObj) {
-                    if (a !== b) {
-                        diff.push({ path, status: (a === undefined) ? 'added' : (b === undefined) ? 'removed' : 'changed', current: a, incoming: b });
-                    }
-                    return;
-                }
-
-                if (Array.isArray(a) || Array.isArray(b)) {
-                    // Treat arrays as atomic to avoid noise
-                    if (!this.deepEqual(a ?? [], b ?? [])) {
-                        diff.push({ path, status: (a === undefined) ? 'added' : (b === undefined) ? 'removed' : 'changed', current: a, incoming: b });
-                    }
-                    return;
-                }
-
-                const keys = new Set([...(a ? Object.keys(a) : []), ...(b ? Object.keys(b) : [])]);
-                [...keys].sort().forEach(k => {
-                    walk(a ? a[k] : undefined, b ? b[k] : undefined, path ? `${path}.${k}` : k);
-                });
+                const aObj = a && typeof a === 'object', bObj = b && typeof b === 'object';
+                if (!aObj && !bObj) { if (a !== b) diff.push({ path, status: (a === undefined) ? 'added' : (b === undefined) ? 'removed' : 'changed', current: a, incoming: b }); return; }
+                if (Array.isArray(a) || Array.isArray(b)) { if (!this.deepEqual(a ?? [], b ?? [])) diff.push({ path, status: (a === undefined) ? 'added' : (b === undefined) ? 'removed' : 'changed', current: a, incoming: b }); return; }
+                const keys = new Set([...(a ? Object.keys(a) : []), ...(b ? Object.keys(b) : [])]);[...keys].sort().forEach(k => walk(a ? a[k] : undefined, b ? b[k] : undefined, path ? `${path}.${k}` : k));
             };
-
             walk(rc, ri, '');
             return diff;
         },
 
         renderCurrentClean(item) {
-            const lines = this.computeDiff(item)
-                // current panel shows removed or changed
-                .filter(d => d.status === 'removed' || d.status === 'changed')
-                .map(d => {
-                    const cur = this.escape(typeof d.current === 'string' ? d.current : this.pretty(d.current));
-                    const cls = d.status === 'removed' ? 'line-del' : 'line-chg';
-                    return `<span class="${cls}">- ${d.path}: ${cur}</span>`;
-                });
+            const lines = this.computeDiff(item).filter(d => d.status === 'removed' || d.status === 'changed').map(d => {
+                const cur = this.escape(typeof d.current === 'string' ? d.current : this.pretty(d.current));
+                const cls = d.status === 'removed' ? 'line-del' : 'line-chg';
+                return `<span class="${cls}">- ${d.path}: ${cur}</span>`;
+            });
             return lines.join('\n') || this.escape(this.pretty(this.relevantPair(item, this.type)[0]));
         },
-
         renderIncomingClean(item) {
-            const lines = this.computeDiff(item)
-                // incoming panel shows added or changed
-                .filter(d => d.status === 'added' || d.status === 'changed')
-                .map(d => {
-                    const inc = this.escape(typeof d.incoming === 'string' ? d.incoming : this.pretty(d.incoming));
-                    const cls = d.status === 'added' ? 'line-add' : 'line-chg';
-                    return `<span class="${cls}">+ ${d.path}: ${inc}</span>`;
-                });
+            const lines = this.computeDiff(item).filter(d => d.status === 'added' || d.status === 'changed').map(d => {
+                const inc = this.escape(typeof d.incoming === 'string' ? d.incoming : this.pretty(d.incoming));
+                const cls = d.status === 'added' ? 'line-add' : 'line-chg';
+                return `<span class="${cls}">+ ${d.path}: ${inc}</span>`;
+            });
             return lines.join('\n') || this.escape(this.pretty(this.relevantPair(item, this.type)[1]));
         },
 
-        // ---------- merge logic ----------
         finalMerge(item, decision) {
             const c = item.current, i = item.incoming;
             if (decision === 'incoming') return i;
             if (decision === 'current') return c;
-
-            const merge = (a, b) => {
-                if (Array.isArray(a) && Array.isArray(b)) return b; // prefer incoming arrays
-                if (a && typeof a === 'object' && b && typeof b === 'object') {
-                    const out = { ...a };
-                    Object.keys(b).forEach(k => { out[k] = merge(a[k], b[k]); });
-                    return out;
-                }
-                return b !== undefined ? b : a;
-            };
+            const merge = (a, b) => { if (Array.isArray(a) && Array.isArray(b)) return b; if (a && typeof a === 'object' && b && typeof b === 'object') { const out = { ...a }; Object.keys(b).forEach(k => out[k] = merge(a[k], b[k])); return out; } return b !== undefined ? b : a; };
             return merge(c, i);
         },
 
-        // ---------- file flow ----------
         onFile(e) {
-            const f = e.target.files && e.target.files[0];
-            if (!f) return;
+            const f = e.target.files && e.target.files[0]; if (!f) return;
+            this.loading = true; this.error = ''; this.groups = null; this.decisions = {}; this.open = {};
 
-            this.loading = true;
-            this.error = '';
-            this.groups = null;
-            this.decisions = {};
-            this.open = {};
-
-            previewImport(f)
-                .then(res => {
-                    this.type = res.type;
-                    this.groups = res.groups || {};
-
-                    // Defaults for manual decisions will be set after filtering (so we only default for changed items)
-                    // Open handles by default
-                    Object.keys(this.groups).forEach(h => this.$set(this.open, h, true));
-                    // Defer a tick to ensure filteredGroups computed
-                    this.$nextTick(() => {
-                        Object.values(this.filteredGroups || {}).forEach(sites => {
-                            Object.values(sites).forEach(items => {
-                                items.forEach(it => this.$set(this.decisions, it.key, 'incoming'));
-                            });
+            previewImport(f).then(res => {
+                this.type = res.type; this.groups = res.groups || {};
+                Object.keys(this.groups).forEach(h => this.$set(this.open, h, true));
+                this.$nextTick(() => {
+                    Object.values(this.filteredGroups || {}).forEach(sites => {
+                        Object.values(sites).forEach(items => {
+                            items.forEach(it => this.$set(this.decisions, it.key, 'incoming'));
                         });
                     });
-                })
-                .catch(err => {
-                    this.error = err?.message || 'Failed to analyze file.';
-                })
-                .finally(() => {
-                    this.loading = false;
                 });
+            }).catch(err => { this.error = err?.message || 'Failed to analyze file.'; })
+                .finally(() => { this.loading = false; });
         },
 
-        // ---------- commit ----------
         async commit() {
-            if (this.totalChanged === 0) {
-                Statamic.$toast.info('Nothing to apply.');
-                return;
-            }
-
+            if (this.totalChanged === 0) { Statamic.$toast.info('Nothing to apply.'); return; }
             this.committing = true;
             try {
                 let payload;
-
                 if (this.strategy === 'auto') {
                     payload = { type: this.type, strategy: 'auto', auto_action: this.autoAction };
                 } else {
@@ -407,23 +309,17 @@ export default {
                     });
                     payload = { type: this.type, strategy: 'manual', decisions };
                 }
-
                 const res = await commitImport(payload);
-                Statamic.$toast.success(
-                    `Updated ${res.results.updated}, Created ${res.results.created}, Skipped ${res.results.skipped}`
-                );
-            } catch (e) {
-                Statamic.$toast.error(e?.message || 'Commit failed.');
-            } finally {
-                this.committing = false;
-            }
+                Statamic.$toast.success(`Updated ${res.results.updated}, Created ${res.results.created}, Skipped ${res.results.skipped}`);
+            } catch (e) { Statamic.$toast.error(e?.message || 'Commit failed.'); }
+            finally { this.committing = false; }
         },
     },
 };
 </script>
 
 <style scoped>
-/* Code blocks */
+/* Code blocks: ensure side-by-side columns never force wrap */
 .code-block {
     background: #0b1220;
     color: #e5edff;
@@ -438,8 +334,7 @@ export default {
 /* Full-line highlight */
 .line-add,
 .line-del,
-.line-chg,
-.line-ctx {
+.line-chg {
     display: block;
     padding: 2px 6px;
     border-radius: 6px;
@@ -454,22 +349,19 @@ export default {
 
 /* green */
 .line-del {
-    background: rgba(239, 68, 68, .12);
-    color: #ef4444;
+    background: rgba(239, 68, 68, .20);
+    color: #fff;
 }
 
-/* red */
+/* strong red bar */
 .line-chg {
-    background: rgba(245, 158, 11, .12);
+    background: rgba(245, 158, 11, .15);
     color: #f59e0b;
 }
 
 /* amber */
-.line-ctx {
-    color: #94a3b8;
-}
 
-/* Badges */
+/* Badges + buttons */
 .badge {
     font-size: .7rem;
     font-weight: 700;
@@ -492,7 +384,6 @@ export default {
     color: #374151;
 }
 
-/* Small icon button */
 .icon-btn {
     display: inline-flex;
     align-items: center;

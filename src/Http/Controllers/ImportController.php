@@ -16,21 +16,169 @@ class ImportController extends Controller
 {
     public function preview(Request $request)
     {
-        $request->validate(['file' => 'required|file|mimes:json,txt,application/json']);
+        $request->validate(['file' => 'required|file|mimetypes:application/json,text/plain']);
         $json = $request->file('file')->get();
-        $payload = json_decode($json, true);
-        if (!is_array($payload)) return response()->json(['ok' => false, 'error' => 'Invalid JSON'], 422);
+        $data = json_decode($json, true);
 
-        $type = $payload['type'] ?? null;
-        $items = $payload['items'] ?? [];
+        if (!is_array($data)) abort(422, 'Invalid JSON.');
 
-        $diffs = [];
-        foreach ($items as $it) {
-            $diffs[] = $this->diffOne($type, $it);
+        // Verify HMAC (tamper-evident)
+        $meta = $data['__meta'] ?? [];
+        $sig  = $meta['sig'] ?? '';
+        $secret = config('app.key');
+        $toSign = json_encode([
+            'type'    => $data['type'] ?? null,
+            'handles' => $data['handles'] ?? [],
+            'sites'   => $data['sites'] ?? [],
+            'since'   => $data['since'] ?? null,
+            'items'   => $data['items'] ?? [],
+        ], JSON_UNESCAPED_UNICODE);
+        $calc = base64_encode(hash_hmac('sha256', $toSign, $secret, true));
+        if (!$sig || !hash_equals($calc, $sig)) {
+            return response()->json(['error' => 'File signature invalid. The file appears to be modified.'], 422);
         }
 
-        return response()->json(['ok' => true, 'type' => $type, 'diffs' => $diffs]);
+        $type  = $data['type'] ?? 'collections';
+        $items = $data['items'] ?? [];
+
+        $diffs = [];
+
+        foreach ($items as $it) {
+            // derive a unique key per type so the UI can display it
+            $key = match ($type) {
+                'collections' => "{$it['collection']}/{$it['site']}/{$it['slug']}",
+                'taxonomies'  => "{$it['taxonomy']}/{$it['site']}/{$it['slug']}",
+                'navigation'  => "{$it['handle']}/{$it['site']}",
+                'globals'     => "{$it['handle']}/{$it['site']}",
+                'assets'      => "{$it['container']}/{$it['path']}",
+                default       => 'item'
+            };
+
+            // load current
+            [$current, $incoming] = $this->resolveCurrentAndIncoming($type, $it);
+
+            // compute field-level diff
+            $diff = $this->diffAssocDeep($current, $incoming);
+
+            if (!empty($diff)) {
+                $status = $this->summarizeStatus($diff); // 'create'|'update'|'delete'
+                $diffs[] = [
+                    'key'      => $key,
+                    'status'   => $status,
+                    'diff'     => $diff,     // path => {status, current, incoming}
+                    'current'  => $current,
+                    'incoming' => $incoming,
+                ];
+            }
+        }
+
+        return response()->json([
+            'type'  => $type,
+            'diffs' => array_values($diffs), // only affected items
+        ]);
     }
+
+    protected function resolveCurrentAndIncoming(string $type, array $incomingItem): array
+    {
+        switch ($type) {
+            case 'collections':
+                $e = \Statamic\Facades\Entry::query()
+                    ->where('collection', $incomingItem['collection'])
+                    ->where('site', $incomingItem['site'])
+                    ->where('slug', $incomingItem['slug'])
+                    ->first();
+                $current = $e ? [
+                    'uuid'       => $e->id(),
+                    'collection' => $e->collectionHandle(),
+                    'site'       => $e->site(),
+                    'slug'       => $e->slug(),
+                    'published'  => (bool)$e->published(),
+                    'data'       => $e->data()->all(),
+                ] : [];
+                return [$current, [
+                    'uuid'       => $incomingItem['uuid'] ?? null,
+                    'collection' => $incomingItem['collection'],
+                    'site'       => $incomingItem['site'],
+                    'slug'       => $incomingItem['slug'],
+                    'published'  => (bool)($incomingItem['published'] ?? false),
+                    'data'       => $incomingItem['data'] ?? [],
+                ]];
+
+            case 'taxonomies':
+                $t = \Statamic\Facades\Term::query()
+                    ->where('taxonomy', $incomingItem['taxonomy'])
+                    ->where('site', $incomingItem['site'])
+                    ->where('slug', $incomingItem['slug'])
+                    ->first();
+                $current = $t ? ['data' => $t->data()->all()] : [];
+                return [$current, ['data' => $incomingItem['data'] ?? []]];
+
+            case 'navigation':
+                $tree = \Statamic\Facades\Nav::findByHandle($incomingItem['handle'])?->in($incomingItem['site']);
+                $current = $tree ? ['tree' => $tree->tree()] : [];
+                return [$current, ['tree' => $incomingItem['tree'] ?? []]];
+
+            case 'globals':
+                $gs = \Statamic\Facades\GlobalSet::findByHandle($incomingItem['handle']);
+                $loc = $gs?->in($incomingItem['site']);
+                $current = $loc ? ['data' => $loc->data()->all()] : [];
+                return [$current, ['data' => $incomingItem['data'] ?? []]];
+
+            case 'assets':
+                $ac = \Statamic\Facades\AssetContainer::findByHandle($incomingItem['container']);
+                $a  = $ac?->asset($incomingItem['path']);
+                $current = $a ? ['data' => $a->data()->all()] : [];
+                return [$current, ['data' => $incomingItem['data'] ?? []]];
+        }
+
+        return [[], $incomingItem];
+    }
+
+    /** Deep assoc diff, returns only changed paths. */
+    protected function diffAssocDeep($cur, $inc, string $base = ''): array
+    {
+        $out = [];
+
+        $keys = array_unique(array_merge(array_keys((array)$cur), array_keys((array)$inc)));
+        foreach ($keys as $k) {
+            $p = ltrim($base . '.' . $k, '.');
+            $cv = $cur[$k] ?? null;
+            $iv = $inc[$k] ?? null;
+
+            $cObj = is_array($cv) || is_object($cv);
+            $iObj = is_array($iv) || is_object($iv);
+
+            if ($cObj || $iObj) {
+                $nested = $this->diffAssocDeep((array)$cv, (array)$iv, $p);
+                $out = $out + $nested;
+                continue;
+            }
+
+            if ($cv === null && $iv !== null) {
+                $out[$p] = ['status' => 'added', 'current' => $cv, 'incoming' => $iv];
+            } elseif ($cv !== null && $iv === null) {
+                $out[$p] = ['status' => 'removed', 'current' => $cv, 'incoming' => $iv];
+            } elseif ($cv !== $iv) {
+                $out[$p] = ['status' => 'changed', 'current' => $cv, 'incoming' => $iv];
+            }
+        }
+
+        return $out;
+    }
+
+    protected function summarizeStatus(array $diff): string
+    {
+        $hasAdd = $hasDel = $hasChg = false;
+        foreach ($diff as $d) {
+            if ($d['status'] === 'added') $hasAdd = true;
+            elseif ($d['status'] === 'removed') $hasDel = true;
+            else $hasChg = true;
+        }
+        if ($hasAdd && !$hasDel && !$hasChg) return 'create';
+        if ($hasDel && !$hasAdd && !$hasChg) return 'delete';
+        return 'update';
+    }
+
 
     public function commit(Request $request)
     {
@@ -76,62 +224,6 @@ class ImportController extends Controller
         return response()->json(['ok' => true, 'results' => $results]);
     }
 
-    private function diffOne(string $type, array $incoming): array
-    {
-        return match ($type) {
-            'collections' => $this->diffEntry($incoming),
-            'taxonomies'  => $this->diffTerm($incoming),
-            'navigation'  => $this->diffNav($incoming),
-            'globals'     => $this->diffGlobal($incoming),
-            'assets'      => $this->diffAsset($incoming),
-            default       => ['key' => 'unknown', 'status' => 'unknown', 'diff' => []]
-        };
-    }
-
-    private function diffEntry(array $inc): array
-    {
-        $live = Entry::query()->where('collection', $inc['collection'])->where('site', $inc['site'])->where('slug', $inc['slug'])->first();
-        $key = $inc['collection'] . '/' . $inc['site'] . '/' . $inc['slug'];
-        if (!$live) {
-            return ['key' => $key, 'status' => 'create', 'incoming' => $inc['data'], 'current' => null, 'diff' => $this->diffArrays([], $inc['data'])];
-        }
-        $cur = $live->data()->all();
-        return ['key' => $key, 'status' => 'update', 'incoming' => $inc['data'], 'current' => $cur, 'diff' => $this->diffArrays($cur, $inc['data'])];
-    }
-
-    private function diffTerm(array $inc): array
-    {
-        $live = Term::query()->where('taxonomy', $inc['taxonomy'])->where('site', $inc['site'])->where('slug', $inc['slug'])->first();
-        $key = $inc['taxonomy'] . '/' . $inc['site'] . '/' . $inc['slug'];
-        if (!$live) return ['key' => $key, 'status' => 'create', 'incoming' => $inc['data'], 'current' => null, 'diff' => $this->diffArrays([], $inc['data'])];
-        $cur = $live->data()->all();
-        return ['key' => $key, 'status' => 'update', 'incoming' => $inc['data'], 'current' => $cur, 'diff' => $this->diffArrays($cur, $inc['data'])];
-    }
-
-    private function diffNav(array $inc): array
-    {
-        $key = $inc['handle'] . '/' . $inc['site'];
-        $tree = Nav::findByHandle($inc['handle'])?->in($inc['site']);
-        $cur = $tree?->tree() ?: [];
-        return ['key' => $key, 'status' => $tree ? 'update' : 'create', 'incoming' => $inc['tree'], 'current' => $cur, 'diff' => $this->diffArrays($cur, $inc['tree'])];
-    }
-
-    private function diffGlobal(array $inc): array
-    {
-        $key = $inc['handle'] . '/' . $inc['site'];
-        $set = GlobalSet::findByHandle($inc['handle']);
-        $cur = $set?->in($inc['site'])?->data()->all() ?: [];
-        return ['key' => $key, 'status' => $set ? 'update' : 'create', 'incoming' => $inc['data'], 'current' => $cur, 'diff' => $this->diffArrays($cur, $inc['data'])];
-    }
-
-    private function diffAsset(array $inc): array
-    {
-        $key = $inc['container'] . '/' . $inc['path'];
-        $container = AssetContainer::findByHandle($inc['container']);
-        $asset = $container?->asset($inc['path']);
-        $cur = $asset?->data()->all() ?: [];
-        return ['key' => $key, 'status' => $asset ? 'update' : 'create', 'incoming' => $inc['data'], 'current' => $cur, 'diff' => $this->diffArrays($cur, $inc['data'])];
-    }
 
     private function diffArrays(array $cur, array $inc): array
     {

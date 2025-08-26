@@ -16,203 +16,171 @@ class ExportController extends Controller
 {
     public function options(Request $request)
     {
-        $type = $request->query('type');
-        return match ($type) {
-            'collections' => response()->json(Collection::all()->map->handle()->values()),
-            'taxonomies'  => response()->json(Taxonomy::all()->map->handle()->values()),
-            'navigation'  => response()->json(Nav::all()->map->handle()->values()),
-            'globals'     => response()->json(GlobalSet::all()->map->handle()->values()),
-            'assets'      => response()->json(AssetContainer::all()->map->handle()->values()),
-            default       => response()->json(['collections', 'taxonomies', 'navigation', 'globals', 'assets'])
-        };
+        $type = $request->string('type')->toString();
+
+        if ($type === 'sites') {
+            $options = \Statamic\Facades\Site::all()->map->handle()->values()->all();
+            return response()->json(['options' => $options]);
+        }
+
+        switch ($type) {
+            case 'collections':
+                $options = \Statamic\Facades\Collection::all()->map->handle()->values()->all();
+                break;
+            case 'taxonomies':
+                $options = \Statamic\Facades\Taxonomy::all()->map->handle()->values()->all();
+                break;
+            case 'navigation':
+                $options = \Statamic\Facades\Nav::all()->map->handle()->values()->all();
+                break;
+            case 'globals':
+                $options = \Statamic\Facades\GlobalSet::all()->map->handle()->values()->all();
+                break;
+            case 'assets':
+                $options = \Statamic\Facades\AssetContainer::all()->map->handle()->values()->all();
+                break;
+            default:
+                $options = [];
+        }
+
+        return response()->json(['options' => $options]);
     }
+
 
     public function export(Request $request)
     {
         $validated = $request->validate([
-            'type'        => 'required|in:collections,taxonomies,navigation,globals,assets',
-            'handles'     => 'array',
-            'handles.*'   => 'string',
-            'sites'       => 'array',
-            'sites.*'     => 'string',
-            'since'       => 'nullable|string',
-            'out'         => 'nullable|string', // optional custom filename
+            'type'      => 'required|in:collections,taxonomies,navigation,globals,assets',
+            'handles'   => 'nullable',
+            'sites'     => 'nullable',
+            'since'     => 'nullable|string',
+            'out'       => 'nullable|string',
         ]);
 
         $type    = $validated['type'];
-        $handles = $validated['handles'] ?? [];
-        $sites   = $validated['sites'] ?? [];
+        $handles = is_string($request->handles) ? json_decode($request->handles, true) : ($request->handles ?? []);
+        $sites   = is_string($request->sites)   ? json_decode($request->sites, true)   : ($request->sites ?? []);
         $since   = $validated['since'] ?? null;
 
-        // Parse 'since' safely (supports ISO8601 or Y-m-d H:i:s)
         $sinceAt = null;
         if ($since) {
             try {
                 $sinceAt = \Carbon\Carbon::parse($since);
             } catch (\Throwable $e) {
-                $sinceAt = null;
+            }
+        }
+
+        $items = collect();
+
+        if ($type === 'collections') {
+            $q = \Statamic\Facades\Entry::query()
+                ->when($handles, fn($q) => $q->whereIn('collection', $handles))
+                ->when($sites, fn($q) => $q->whereIn('site', $sites))
+                ->when($sinceAt, fn($q) => $q->where('updated_at', '>=', $sinceAt));
+            $items = $q->get()->map(function ($e) {
+                $site = $e->site();
+                $siteHandle = is_object($site) && method_exists($site, 'handle') ? $site->handle() : (string)$site;
+                return [
+                    'uuid'       => $e->id(),
+                    'collection' => $e->collectionHandle(),
+                    'site'       => $siteHandle,
+                    'slug'       => (string)$e->slug(),
+                    'published'  => (bool)$e->published(),
+                    'updated_at' => optional($e->model()?->updated_at)->toIso8601String(),
+                    'data'       => $e->data()->all(),
+                ];
+            });
+        }
+
+        if ($type === 'taxonomies') {
+            $taxonomyHandles = $handles ?: \Statamic\Facades\Taxonomy::all()->map->handle()->all();
+            foreach ($taxonomyHandles as $tax) {
+                $terms = \Statamic\Facades\Term::query()
+                    ->where('taxonomy', $tax)
+                    ->when($sites, fn($q) => $q->whereIn('site', $sites))
+                    ->when($sinceAt, fn($q) => $q->where('updated_at', '>=', $sinceAt))
+                    ->get();
+                $items = $items->merge($terms->map(fn($t) => [
+                    'id'         => $t->id(),
+                    'taxonomy'   => $tax,
+                    'site'       => $t->site(),
+                    'slug'       => (string)$t->slug(),
+                    'data'       => $t->data()->all(),
+                    'updated_at' => optional($t->model()?->updated_at)->toIso8601String(),
+                ]));
+            }
+        }
+
+        if ($type === 'navigation') {
+            $navHandles = $handles ?: \Statamic\Facades\Nav::all()->map->handle()->all();
+            foreach ($navHandles as $nav) {
+                $trees = \Statamic\Facades\Nav::findByHandle($nav)?->trees() ?? collect();
+                foreach ($trees as $tree) {
+                    $items->push([
+                        'handle'     => $nav,
+                        'site'       => $tree->site(),
+                        'tree'       => $tree->tree(),
+                        'updated_at' => now()->toIso8601String(),
+                    ]);
+                }
+            }
+        }
+
+        if ($type === 'globals') {
+            $setHandles = $handles ?: \Statamic\Facades\GlobalSet::all()->map->handle()->all();
+            foreach ($setHandles as $set) {
+                if (! $gs = \Statamic\Facades\GlobalSet::findByHandle($set)) continue;
+                foreach ($gs->localizations() as $loc) {
+                    $siteHandle = method_exists($loc->site(), 'handle') ? $loc->site()->handle() : (string)$loc->site();
+                    $items->push([
+                        'handle'     => $set,
+                        'site'       => $siteHandle,
+                        'data'       => $loc->data()->all(),
+                        'updated_at' => optional($loc->model()?->updated_at)->toIso8601String(),
+                    ]);
+                }
+            }
+        }
+
+        if ($type === 'assets') {
+            $containerHandles = $handles ?: \Statamic\Facades\AssetContainer::all()->map->handle()->all();
+            foreach ($containerHandles as $c) {
+                if (! $container = \Statamic\Facades\AssetContainer::findByHandle($c)) continue;
+                foreach ($container->assets() as $a) {
+                    $items->push([
+                        'container'  => $c,
+                        'path'       => $a->path(),
+                        'data'       => $a->data()->all(),
+                        'updated_at' => optional($a->model()?->updated_at)->toIso8601String(),
+                    ]);
+                }
             }
         }
 
         $payload = [
             'exported_at' => now()->toIso8601String(),
             'type'        => $type,
-            'handles'     => $handles,
-            'sites'       => $sites,
+            'handles'     => array_values($handles ?: []),
+            'sites'       => array_values($sites ?: []),
             'since'       => $since,
-            'items'       => [],
+            'items'       => array_values($items->all()),
         ];
 
-        switch ($type) {
-            case 'collections': {
-                    $query = \Statamic\Facades\Entry::query()
-                        ->when($handles, fn($q) => $q->whereIn('collection', $handles))
-                        ->when($sites,   fn($q) => $q->whereIn('site', $sites))
-                        ->when($sinceAt, fn($q) => $q->where('updated_at', '>=', $sinceAt));
+        // HMAC signature so clients can't silently edit content.
+        $secret = config('app.key');
+        $toSign = json_encode(['type' => $payload['type'], 'handles' => $payload['handles'], 'sites' => $payload['sites'], 'since' => $payload['since'], 'items' => $payload['items']], JSON_UNESCAPED_UNICODE);
+        $sig = base64_encode(hash_hmac('sha256', $toSign, $secret, true));
+        $payload['__meta'] = ['sig' => $sig, 'algo' => 'HMAC-SHA256'];
 
-                    $items = $query->get()->map(function ($e) {
-                        $site = $e->site();
-                        $siteHandle = is_object($site) && method_exists($site, 'handle') ? $site->handle() : (string) $site;
+        $filename = ($request->string('out')->toString() ?: ($type . '-export-' . now()->format('Ymd-His') . '.json'));
 
-                        return [
-                            'uuid'       => $e->id(),
-                            'collection' => $e->collectionHandle(),
-                            'site'       => $siteHandle,
-                            'slug'       => (string) $e->slug(),
-                            'published'  => (bool) $e->published(),
-                            'updated_at' => optional($e->model()?->updated_at)->toIso8601String(),
-                            'data'       => $e->data()->all(),
-                        ];
-                    });
+        $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
 
-                    $payload['items'] = $items->values();
-                    break;
-                }
-
-            case 'taxonomies': {
-                    $taxonomyHandles = $handles ?: \Statamic\Facades\Taxonomy::all()->map->handle()->all();
-                    $items = collect();
-
-                    foreach ($taxonomyHandles as $tax) {
-                        $terms = \Statamic\Facades\Term::query()
-                            ->where('taxonomy', $tax)
-                            ->when($sites,   fn($q) => $q->whereIn('site', $sites))
-                            ->when($sinceAt, fn($q) => $q->where('updated_at', '>=', $sinceAt))
-                            ->get();
-
-                        $items = $items->merge($terms->map(function ($t) use ($tax) {
-                            return [
-                                'id'         => $t->id(),
-                                'taxonomy'   => $tax,
-                                'site'       => $t->site(),
-                                'slug'       => (string) $t->slug(),
-                                'data'       => $t->data()->all(),
-                                'updated_at' => optional($t->model()?->updated_at)->toIso8601String(),
-                            ];
-                        }));
-                    }
-
-                    $payload['items'] = $items->values();
-                    break;
-                }
-
-            case 'navigation': {
-                    $navHandles = $handles ?: \Statamic\Facades\Nav::all()->map->handle()->all();
-                    $items = collect();
-
-                    foreach ($navHandles as $nav) {
-                        $trees = \Statamic\Facades\Nav::findByHandle($nav)?->trees() ?? collect();
-                        foreach ($trees as $tree) {
-                            // Tree content (array) is returned by ->tree()
-                            $items->push([
-                                'handle'     => $nav,
-                                'site'       => $tree->site(),
-                                'tree'       => $tree->tree(),
-                                'updated_at' => now()->toIso8601String(),
-                            ]);
-                        }
-                    }
-
-                    $payload['items'] = $items->values();
-                    break;
-                }
-
-            case 'globals': {
-                    $setHandles = $handles ?: \Statamic\Facades\GlobalSet::all()->map->handle()->all();
-                    $items = collect();
-
-                    foreach ($setHandles as $set) {
-                        $gs = \Statamic\Facades\GlobalSet::findByHandle($set);
-                        if (! $gs) {
-                            continue;
-                        }
-
-                        foreach ($gs->localizations() as $loc) {
-                            $items->push([
-                                'handle'     => $set,
-                                'site'       => $loc->site()->handle(),
-                                'data'       => $loc->data()->all(),
-                                'updated_at' => optional($loc->model()?->updated_at)->toIso8601String(),
-                            ]);
-                        }
-                    }
-
-                    $payload['items'] = $items->values();
-                    break;
-                }
-
-            case 'assets': {
-                    $containerHandles = $handles ?: \Statamic\Facades\AssetContainer::all()->map->handle()->all();
-                    $items = collect();
-
-                    foreach ($containerHandles as $c) {
-                        $container = \Statamic\Facades\AssetContainer::findByHandle($c);
-                        if (! $container) {
-                            continue;
-                        }
-
-                        $assets = $container->assets(); // iterable of Asset objects
-                        foreach ($assets as $a) {
-                            // Note: we export meta, not binaries.
-                            $items->push([
-                                'container'  => $c,
-                                'path'       => $a->path(),
-                                'data'       => $a->data()->all(),
-                                'updated_at' => optional($a->model()?->updated_at)->toIso8601String(),
-                            ]);
-                        }
-                    }
-
-                    $payload['items'] = $items->values();
-                    break;
-                }
-        }
-
-        // -------- persist file ----------
-        $disk   = config('content-sync.disk', 'local');
-        $folder = trim(config('content-sync.folder', 'sync'), '/');
-
-        // Optional custom filename; fallback to timestamped default
-        $custom = $validated['out'] ?? null;
-        $file   = $custom ? basename($custom) : sprintf('%s-export-%s.json', $type, now()->format('Ymd-His'));
-
-        // Ensure folder exists and write
-        if (! Storage::disk($disk)->exists($folder)) {
-            Storage::disk($disk)->makeDirectory($folder);
-        }
-
-        $relativePath = $folder . '/' . $file;
-        Storage::disk($disk)->put(
-            $relativePath,
-            json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)
-        );
-
-        return response()->json([
-            'ok'           => true,
-            'disk'         => $disk,
-            'path'         => Storage::disk($disk)->path($relativePath),
-            'download_url' => route('content-sync.download', ['file' => $file]), // ✅ our CP download route
-            'count'        => count($payload['items']),
+        return response($json, 200, [
+            'Content-Type' => 'application/json; charset=utf-8',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+            'X-Content-Sync-Count' => (string) count($payload['items']),
+            'X-Content-Sync-Immutable' => '1', // hint
         ]);
     }
 }

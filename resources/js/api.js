@@ -1,41 +1,84 @@
+const base = Statamic.$config.get('cpUrl') + '/content-sync';
+
 export async function fetchOptions(type) {
-    const res = await fetch(`/cp/content-sync/options?type=${encodeURIComponent(type)}`, {
-        headers: { 'X-CSRF-TOKEN': Statamic.$config.get('csrfToken') }
-    });
-    return res.json();
+    const res = await fetch(`${base}/options?type=${encodeURIComponent(type)}`, { credentials: 'same-origin' });
+    const json = await res.json();
+    return json.options || [];
 }
 
+export async function fetchSites() {
+    const res = await fetch(`${base}/options?type=sites`, { credentials: 'same-origin' });
+    const json = await res.json();
+    return json.options || [];
+}
+
+/**
+ * Export and force a local download (no server-side write).
+ * We post payload and receive a Blob with Content-Disposition filename.
+ */
 export async function exportPayload(payload) {
-    const res = await fetch('/cp/content-sync/export', {
+    const res = await fetch(`${base}/export`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-TOKEN': Statamic.$config.get('csrfToken')
-        },
-        body: JSON.stringify(payload)
+        headers: { 'X-CSRF-TOKEN': Statamic.csrfToken },
+        credentials: 'same-origin',
+        body: (() => {
+            const d = new FormData();
+            Object.entries(payload).forEach(([k, v]) => {
+                d.append(k, Array.isArray(v) ? JSON.stringify(v) : v ?? '');
+            });
+            return d;
+        })(),
     });
-    return res.json();
+
+    if (!res.ok) throw new Error('Export failed');
+
+    const blob = await res.blob();
+
+    // Try to infer filename from header; fallback.
+    let filename = 'export.json';
+    const disp = res.headers.get('Content-Disposition') || '';
+    const m = /filename="?([^"]+)"?/i.exec(disp);
+    if (m) filename = m[1];
+
+    // Save file
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    a.remove(); window.URL.revokeObjectURL(url);
+
+    // For UI stats, parse the blob (safe, it’s small json)
+    try {
+        const txt = await blob.text();
+        const json = JSON.parse(txt);
+        return { count: (json.items || []).length, path: filename, meta: json.__meta || null };
+    } catch {
+        return { count: 0, path: filename };
+    }
 }
 
+/** Upload file for preview diff (auto-preview workflow). */
 export async function previewImport(file) {
-    const fd = new FormData();
-    fd.append('file', file);
-    const res = await fetch('/cp/content-sync/import/preview', {
+    const d = new FormData();
+    d.append('file', file);
+    const res = await fetch(`${base}/import/preview`, {
         method: 'POST',
-        headers: { 'X-CSRF-TOKEN': Statamic.$config.get('csrfToken') },
-        body: fd
+        headers: { 'X-CSRF-TOKEN': Statamic.csrfToken },
+        credentials: 'same-origin',
+        body: d,
     });
-    return res.json();
+    if (!res.ok) throw new Error('Preview failed');
+    return res.json(); // { type, diffs: [{ key, status, diff, current, incoming }...] }
 }
 
+/** Commit decisions: { type, decisions: [{ key, action: 'current'|'incoming'|'both' }] } */
 export async function commitImport(payload) {
-    const res = await fetch('/cp/content-sync/import/commit', {
+    const res = await fetch(`${base}/import/commit`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRF-TOKEN': Statamic.$config.get('csrfToken')
-        },
-        body: JSON.stringify(payload)
+        headers: { 'X-CSRF-TOKEN': Statamic.csrfToken, 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload),
     });
-    return res.json();
+    if (!res.ok) throw new Error('Commit failed');
+    return res.json(); // { results: { updated, created, skipped } }
 }

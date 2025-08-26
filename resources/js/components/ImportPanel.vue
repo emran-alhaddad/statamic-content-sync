@@ -87,25 +87,27 @@
                                 </div>
 
                                 <!-- Item body -->
-                                <div v-show="isOpen('item::' + it.key)" class="px-3 pb-3 space-y-3">
+                                <div v-show="isOpen('item::' + it.key)" class="px-3 pb-3 space-y-4">
                                     <template v-if="strategy === 'manual'">
-                                        <!-- SIDE BY SIDE -->
+                                        <!-- SIDE BY SIDE WITH CONTEXT HUNKS -->
                                         <div class="flex flex-nowrap gap-3">
                                             <div class="basis-1/2 min-w-0">
                                                 <div class="text-gray-700 font-semibold mb-1">Current</div>
-                                                <pre class="code-block" v-html="renderCurrentClean(it)"></pre>
+                                                <pre class="code-block"
+                                                    v-html="renderPanelWithContext(it, 'current')"></pre>
                                             </div>
                                             <div class="basis-1/2 min-w-0">
                                                 <div class="text-gray-700 font-semibold mb-1">Incoming</div>
-                                                <pre class="code-block" v-html="renderIncomingClean(it)"></pre>
+                                                <pre class="code-block"
+                                                    v-html="renderPanelWithContext(it, 'incoming')"></pre>
                                             </div>
                                         </div>
 
-                                        <!-- FINAL MERGE BELOW -->
+                                        <!-- FINAL MERGE BELOW WITH GREEN HIGHLIGHTS -->
                                         <div class="mt-3">
                                             <div class="text-gray-700 font-semibold mb-1">Final merge</div>
                                             <pre class="code-block"
-                                                v-html="renderFinalClean(it, decisions[it.key] || 'incoming')"></pre>
+                                                v-html="renderFinalWithContext(it, decisions[it.key] || autoDefault(it))"></pre>
                                         </div>
                                     </template>
 
@@ -172,6 +174,7 @@ export default {
                 { label: 'Accept Current changes', value: 'current' },
                 { label: 'Accept Both changes', value: 'both' },
             ],
+            contextLines: 6, // show N lines of context around each change (GitHub-like)
         };
     },
     computed: {
@@ -205,6 +208,7 @@ export default {
         escape(v) { return String(v).replace(/[&<>]/g, s => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[s])); },
         labelFor(v) { const o = this.acceptOptions.find(o => o.value === v); return o ? o.label : v; },
 
+        // ---- Deep equal (stable) -------------------------------------------------
         stableStringify(o) {
             const seen = new WeakSet();
             const walk = v => {
@@ -219,6 +223,7 @@ export default {
         },
         deepEqual(a, b) { try { return this.stableStringify(a) === this.stableStringify(b); } catch { return false; } },
 
+        // ---- What constitutes equality per type ----------------------------------
         relevantPair(item, type) {
             const c = item?.current ?? {}, i = item?.incoming ?? {};
             switch (type) {
@@ -235,6 +240,7 @@ export default {
             return this.deepEqual(rc, ri);
         },
 
+        // ---- Diff engine (key-path oriented) -------------------------------------
         computeDiff(item) {
             const [rc, ri] = this.relevantPair(item, this.type);
             const diff = [];
@@ -248,39 +254,152 @@ export default {
             return diff;
         },
 
-        // Renders highlight lines (full-line background) for CURRENT and INCOMING
-        renderCurrentClean(item) {
-            const lines = this.computeDiff(item).filter(d => d.status === 'removed' || d.status === 'changed').map(d => {
-                const cur = this.escape(typeof d.current === 'string' ? d.current : this.pretty(d.current));
-                const cls = d.status === 'removed' ? 'line-del' : 'line-chg';
-                return `<span class="${cls}">- ${d.path}: ${cur}</span>`;
-            });
-            return lines.length ? lines.join('\n') : this.escape(this.pretty(this.relevantPair(item, this.type)[0]));
+        // ---- Time precedence (+/- placement per panel) ---------------------------
+        toEpoch(val) {
+            if (val == null) return 0;
+            if (typeof val === 'number') return (val > 1e12) ? val : val * 1000;
+            if (typeof val === 'string') {
+                const n = Number(val);
+                if (!Number.isNaN(n)) return (n > 1e12) ? n : n * 1000;
+                const t = Date.parse(val); return Number.isNaN(t) ? 0 : t;
+            }
+            return 0;
         },
-        renderIncomingClean(item) {
-            const lines = this.computeDiff(item).filter(d => d.status === 'added' || d.status === 'changed').map(d => {
-                const inc = this.escape(typeof d.incoming === 'string' ? d.incoming : this.pretty(d.incoming));
-                const cls = d.status === 'added' ? 'line-add' : 'line-chg';
-                return `<span class="${cls}">+ ${d.path}: ${inc}</span>`;
-            });
-            return lines.length ? lines.join('\n') : this.escape(this.pretty(this.relevantPair(item, this.type)[1]));
+        itemEpoch(obj) {
+            // prefer top-level updated_at, fall back to data.updated_at
+            return this.toEpoch(obj?.updated_at ?? obj?.data?.updated_at ?? 0);
+        },
+        fresherSide(item) {
+            const cur = this.itemEpoch(item.current), inc = this.itemEpoch(item.incoming);
+            if (cur > inc) return 'current';
+            if (inc > cur) return 'incoming';
+            // tie-breaker: prefer incoming
+            return 'incoming';
         },
 
-        // Final merge renderer: highlight the keys that changed (amber), showing the chosen final value
-        renderFinalClean(item, decision) {
+        // ---- Context windowing helpers -------------------------------------------
+        lastKeyFromPath(p) { const parts = p.split('.'); return parts[parts.length - 1]; },
+        findAllMatchIndexes(lines, key) {
+            const needle = `"${key}"`;
+            const idxs = [];
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].includes(needle)) idxs.push(i);
+            }
+            return idxs;
+        },
+        mergeWindows(windows) {
+            if (!windows.length) return [];
+            windows.sort((a, b) => a[0] - b[0]);
+            const out = [windows[0].slice()];
+            for (let i = 1; i < windows.length; i++) {
+                const [s, e] = windows[i], last = out[out.length - 1];
+                if (s <= last[1] + 1) { last[1] = Math.max(last[1], e); } else out.push([s, e]);
+            }
+            return out;
+        },
+
+        // Build a panel with GitHub-like context and +/- per recency
+        renderPanelWithContext(item, side) {
+            const other = side === 'current' ? 'incoming' : 'current';
+            const obj = item[side] || {};
+            const json = this.pretty(this.relevantPair(item, this.type)[side === 'current' ? 0 : 1]);
+            const lines = json.split('\n');
+
+            const changes = this.computeDiff(item);
+            if (!changes.length) {
+                // no diffs under relevant subset – show nothing
+                return this.escape('(no changes)');
+            }
+
+            const keyHits = [];
+            const changeMap = {}; // lineIndex -> { type: 'add'|'del'|'chg', label:'+|-' }
+            const fresher = this.fresherSide(item);
+
+            // collect windows around each changed path (based on last key segment)
+            const context = this.contextLines;
+            changes.forEach(d => {
+                const key = this.lastKeyFromPath(d.path);
+                const idxs = this.findAllMatchIndexes(lines, key);
+                if (!idxs.length) {
+                    // fallback: highlight opening brace of the object
+                    idxs.push(Math.max(lines.findIndex(l => l.trim().endsWith('{')), 0));
+                }
+                idxs.forEach(idx => {
+                    keyHits.push([Math.max(0, idx - context), Math.min(lines.length - 1, idx + context)]);
+                    // Decide sign/color for this line in this panel
+                    let label = '?', type = 'chg';
+                    if (d.status === 'changed') {
+                        // fresher side gets '+', older gets '-'
+                        label = (side === fresher) ? '+' : '-';
+                        type = (side === fresher) ? 'add' : 'del';
+                    } else if (d.status === 'added') { // exists only in incoming subset
+                        if (side === 'incoming') { label = '+'; type = 'add'; } else { label = '-'; type = 'del'; }
+                    } else if (d.status === 'removed') { // exists only in current subset
+                        if (side === 'current') { label = '+'; type = 'add'; } else { label = '-'; type = 'del'; }
+                    }
+                    changeMap[idx] = { type, label };
+                });
+            });
+
+            const windows = this.mergeWindows(keyHits);
+            const out = [];
+            windows.forEach(([s, e], wi) => {
+                if (wi > 0) out.push('<div class="hunk-gap">…</div>');
+                for (let i = s; i <= e; i++) {
+                    const raw = lines[i];
+                    const mark = changeMap[i];
+                    if (mark) {
+                        const cls = mark.type === 'add' ? 'line-add' : mark.type === 'del' ? 'line-del' : 'line-chg';
+                        out.push(`<span class="${cls}">${this.escape(mark.label)} ${this.escape(raw)}</span>`);
+                    } else {
+                        out.push(this.escape(raw));
+                    }
+                }
+            });
+
+            return out.join('\n');
+        },
+
+        // Final merge with green highlights on the changed keys only
+        renderFinalWithContext(item, decision) {
             const merged = this.finalMerge(item, decision);
-            const diffs = this.computeDiff(item);
-            if (!diffs.length) return this.escape(this.pretty(merged));
+            const json = this.pretty(merged);
+            const lines = json.split('\n');
 
-            const getByPath = (obj, path) => {
-                return path.split('.').reduce((o, k) => (o && typeof o === 'object') ? o[k] : undefined, obj);
-            };
-            const lines = diffs.map(d => {
-                const val = getByPath(merged, d.path);
-                const shown = (typeof val === 'string') ? this.escape(val) : this.escape(this.pretty(val));
-                return `<span class="line-chg">? ${d.path}: ${shown}</span>`;
+            const changes = this.computeDiff(item);
+            if (!changes.length) return this.escape(json);
+
+            const context = this.contextLines;
+            const keyHits = [];
+            const markIdx = new Set();
+
+            changes.forEach(d => {
+                const key = this.lastKeyFromPath(d.path);
+                const idxs = this.findAllMatchIndexes(lines, key);
+                if (!idxs.length) {
+                    idxs.push(Math.max(lines.findIndex(l => l.trim().endsWith('{')), 0));
+                }
+                idxs.forEach(idx => {
+                    keyHits.push([Math.max(0, idx - context), Math.min(lines.length - 1, idx + context)]);
+                    markIdx.add(idx);
+                });
             });
-            return lines.join('\n');
+
+            const windows = this.mergeWindows(keyHits);
+            const out = [];
+            windows.forEach(([s, e], wi) => {
+                if (wi > 0) out.push('<div class="hunk-gap">…</div>');
+                for (let i = s; i <= e; i++) {
+                    const raw = lines[i];
+                    if (markIdx.has(i)) {
+                        out.push(`<span class="line-final">+ ${this.escape(raw)}</span>`);
+                    } else {
+                        out.push(this.escape(raw));
+                    }
+                }
+            });
+
+            return out.join('\n');
         },
 
         finalMerge(item, decision) {
@@ -290,23 +409,31 @@ export default {
             const merge = (a, b) => { if (Array.isArray(a) && Array.isArray(b)) return b; if (a && typeof a === 'object' && b && typeof b === 'object') { const out = { ...a }; Object.keys(b).forEach(k => out[k] = merge(a[k], b[k])); return out; } return b !== undefined ? b : a; };
             return merge(c, i);
         },
+        autoDefault(item) {
+            // if you switch manual->auto mid-review we pick fresher side as sensible default
+            return this.fresherSide(item);
+        },
 
-        onFile(e) {
+        async onFile(e) {
             const f = e.target.files && e.target.files[0]; if (!f) return;
             this.loading = true; this.error = ''; this.groups = null; this.decisions = {}; this.open = {};
 
-            previewImport(f).then(res => {
+            try {
+                const res = await previewImport(f);
                 this.type = res.type; this.groups = res.groups || {};
                 Object.keys(this.groups).forEach(h => this.$set(this.open, h, true));
                 this.$nextTick(() => {
                     Object.values(this.filteredGroups || {}).forEach(sites => {
                         Object.values(sites).forEach(items => {
-                            items.forEach(it => this.$set(this.decisions, it.key, 'incoming'));
+                            items.forEach(it => this.$set(this.decisions, it.key, this.autoDefault(it)));
                         });
                     });
                 });
-            }).catch(err => { this.error = err?.message || 'Failed to analyze file.'; })
-                .finally(() => { this.loading = false; });
+            } catch (err) {
+                this.error = err?.message || 'Failed to analyze file.';
+            } finally {
+                this.loading = false;
+            }
         },
 
         async commit() {
@@ -320,7 +447,7 @@ export default {
                     const decisions = [];
                     Object.values(this.filteredGroups).forEach(sites => {
                         Object.values(sites).forEach(items => {
-                            items.forEach(it => decisions.push({ key: it.key, action: this.decisions[it.key] || 'incoming' }));
+                            items.forEach(it => decisions.push({ key: it.key, action: this.decisions[it.key] || this.autoDefault(it) }));
                         });
                     });
                     payload = { type: this.type, strategy: 'manual', decisions };
@@ -334,22 +461,24 @@ export default {
 };
 </script>
 
-<!-- NOTE: not scoped; we prefix with .content-sync-import so v-html highlights work -->
+<!-- Not scoped: we namespace under .content-sync-import so v-html spans are styled -->
 <style>
 .content-sync-import .code-block {
     background: #0b1220;
     color: #e5edff;
     border-radius: 12px;
     padding: .75rem;
-    max-height: 260px;
+    max-height: 330px;
     overflow: auto;
     font-size: 12px;
     line-height: 1.45;
 }
 
+/* Full-line highlights */
 .content-sync-import .line-add,
 .content-sync-import .line-del,
-.content-sync-import .line-chg {
+.content-sync-import .line-chg,
+.content-sync-import .line-final {
     display: block;
     padding: 2px 6px;
     border-radius: 6px;
@@ -362,19 +491,32 @@ export default {
     color: #10b981;
 }
 
-/* green */
+/* green for + */
 .content-sync-import .line-del {
     background: rgba(239, 68, 68, .20);
     color: #fff;
 }
 
-/* red */
+/* red for - */
 .content-sync-import .line-chg {
     background: rgba(245, 158, 11, .15);
     color: #f59e0b;
 }
 
-/* amber */
+/* amber (fallback) */
+
+/* Final merge uses green to indicate accepted/affected lines */
+.content-sync-import .line-final {
+    background: rgba(16, 185, 129, .18);
+    color: #c7ffdf;
+}
+
+.content-sync-import .hunk-gap {
+    color: #9aa4b2;
+    text-align: center;
+    padding: 4px 0;
+    user-select: none;
+}
 
 .content-sync-import .badge {
     font-size: .7rem;
